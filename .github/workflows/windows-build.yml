@@ -47,11 +47,21 @@ jobs:
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item dist\JobHuntAI.exe package\
           if (Test-Path opencode-v1.exe) { Copy-Item opencode-v1.exe package\opencode.exe }
-          Copy-Item README.md,install-windows.ps1,uninstall-windows.ps1,start-server.cmd,build-windows.ps1 package\
+          Copy-Item README.md,install-windows.ps1,uninstall-windows.ps1,start-server.cmd,start-server.ps1,build-windows.ps1 package\
           Compress-Archive -Path package\* -DestinationPath JobHuntAI-Windows-x64.zip -Force
-      - name: Build setup installer (best effort)
+      - name: Install from portable package and verify scheduled task
         shell: pwsh
-        continue-on-error: true
+        run: |
+          & .\package\install-windows.ps1
+          $task = Get-ScheduledTask -TaskName JobHuntAI -ErrorAction Stop
+          if ($task.State -ne 'Running' -and $task.State -ne 'Ready') { throw "Task state: $($task.State)" }
+          $response = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/health' -TimeoutSec 10
+          if (-not $response.ok) { throw "Server returned invalid health: $response" }
+          Write-Host "Task registration and web-server health checks passed."
+          Stop-ScheduledTask -TaskName JobHuntAI
+          Unregister-ScheduledTask -TaskName JobHuntAI -Confirm:$false
+      - name: Build setup installer
+        shell: pwsh
         run: |
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
@@ -59,6 +69,16 @@ jobs:
           & $iscc jobhuntai.iss
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
           Copy-Item dist-install\JobHuntAI-Setup-Windows-x64.exe .\JobHuntAI-Setup-Windows-x64.exe
+      - name: Install setup EXE silently and verify local dashboard
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path '.\JobHuntAI-Setup-Windows-x64.exe').Path
+          $process = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exit code $($process.ExitCode)" }
+          $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/health' -TimeoutSec 10
+          if (-not $health.ok) { throw "Installed web server health check failed" }
+          $task = Get-ScheduledTask -TaskName JobHuntAI -ErrorAction Stop
+          Write-Host "Setup executable installed successfully. Scheduled task: $($task.State)."
       - uses: actions/upload-artifact@v4
         with:
           name: JobHuntAI-Windows-x64
