@@ -20,6 +20,7 @@ SetupLogging=yes
 [Files]
 Source: "package\JobHuntAI.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "package\start-server.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "package\start-server.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "package\install-windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "package\uninstall-windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "package\README.md"; DestDir: "{app}"; Flags: ignoreversion
