@@ -17,7 +17,7 @@ $env:JOBHUNTAI_HOME = Join-Path $env:TEMP 'JobHuntAI-Smoke'
 if ($LASTEXITCODE -ne 0) { throw 'EXE smoke test failed' }
 New-Item -ItemType Directory -Force package | Out-Null
 Copy-Item dist\JobHuntAI.exe package\ -Force
-Copy-Item README.md,install-windows.ps1,uninstall-windows.ps1,start-server.cmd package\ -Force
+Copy-Item README.md,install-windows.ps1,uninstall-windows.ps1,start-server.cmd,start-server.ps1 package\ -Force
 if (Test-Path '.\opencode.exe') { Copy-Item '.\opencode.exe' package\ -Force }
 Compress-Archive -Path package\* -DestinationPath JobHuntAI-Windows-x64.zip -Force
 Get-FileHash '.\dist\JobHuntAI.exe' -Algorithm SHA256 | Format-List
