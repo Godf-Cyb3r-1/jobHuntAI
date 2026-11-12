@@ -38,7 +38,8 @@ foreach ($name in @('JobHuntAI.exe','opencode.exe','start-server.ps1','start-ser
 }
 # Avoid schtasks.exe /TR quoting of inline "set VARIABLE=... && ..." (old installer bug).
 # A dedicated -File script sets JOBHUNTAI_HOME and starts the executable.
-$psExe = Join-Path $PSHOME 'powershell.exe'
+$psExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $psExe)) { throw "Windows PowerShell executable not found at $psExe" }
 $serverScript = Join-Path $install 'start-server.ps1'
 $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $serverScript + '"'
 $action = New-ScheduledTaskAction -Execute $psExe -Argument $arguments -WorkingDirectory $install
