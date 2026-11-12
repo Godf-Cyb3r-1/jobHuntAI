@@ -1,5 +1,5 @@
 #define MyAppName "JobHuntAI"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 [Setup]
 AppId={{B64E86EE-82F4-4A50-9875-7EAE37034E19}
 AppName={#MyAppName}
