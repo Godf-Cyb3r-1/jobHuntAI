@@ -27,7 +27,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, Streamin
 from pypdf import PdfReader
 from starlette.middleware.sessions import SessionMiddleware
 
-VERSION = "0.1.0"
+import opencode_engine as ai_engine
+import autonomous_worker as autonomy
+
+VERSION = "0.2.0"
 ROOT = Path(os.getenv("JOBHUNTAI_HOME") or Path(os.getenv("LOCALAPPDATA") or Path.home()) / "JobHuntAI")
 ROOT.mkdir(parents=True, exist_ok=True)
 (ROOT / "resumes").mkdir(exist_ok=True)
@@ -87,6 +90,7 @@ def database():
 def initialize():
     with database() as db:
         db.executescript(SCHEMA)
+        autonomy.setup(db)
         if not db.execute("SELECT COUNT(*) FROM sources").fetchone()[0]:
             # Only examples. Every source's health is confirmed by the first scan.
             db.executemany("INSERT INTO sources(kind,slug,company) VALUES(?,?,?)", [
@@ -289,18 +293,9 @@ def scan_all():
                     db.execute("UPDATE sources SET success=0,last_error=? WHERE id=?", (str(exc)[:400], source["id"]))
                     logger.warning("source %s/%s: %s", source["kind"], source["slug"], exc)
                     stats["failed"] += 1
+    # The collector never creates a match by itself. Only OpenCode's
+    # validated agent decision can promote a hard-filtered candidate.
     with database() as db:
-        users = db.execute("SELECT * FROM users").fetchall()
-        jobs = db.execute("SELECT * FROM jobs WHERE active=1 AND published IS NOT NULL").fetchall()
-        for u in users:
-            for j in jobs:
-                match = match_job(u, j)
-                if match:
-                    db.execute("INSERT INTO matches(user_id,job_id,score,reason,created) VALUES(?,?,?,?,?) ON CONFLICT(user_id,job_id) DO UPDATE SET score=excluded.score, reason=excluded.reason",
-                               (u["id"], j["id"], match[0], match[1], iso()))
-                    stats["matched"] += 1
-                else:
-                    db.execute("DELETE FROM matches WHERE user_id=? AND job_id=?", (u["id"], j["id"]))
         db.execute("DELETE FROM matches WHERE job_id IN (SELECT id FROM jobs WHERE active=0)")
     logger.info("scan: %s", stats)
     return stats
@@ -335,13 +330,34 @@ def notify_matches():
 
 
 def runner():
+    """Autonomous supervisor: independent discovery, collection, AI, and alerts."""
+    next_scan = 0
+    next_discovery = 0
     while not STOP.is_set():
+        current = time.monotonic()
+        if current >= next_discovery:
+            try:
+                autonomy.discover(sys.modules[__name__])
+            except Exception:
+                logger.exception("autonomous discovery worker failed")
+            next_discovery = current + 12 * 3600
+        if current >= next_scan:
+            try:
+                scan_all()
+            except Exception:
+                logger.exception("job-fetching worker failed")
+            next_scan = current + SCAN_INTERVAL
         try:
-            scan_all()
+            ai_engine.launch(ROOT)
+            result = autonomy.evaluate(sys.modules[__name__], limit=5)
+            logger.info("OpenCode autonomous evaluation: %s", result)
+        except Exception:
+            logger.exception("OpenCode matching worker failed")
+        try:
             notify_matches()
         except Exception:
-            logger.exception("worker error")
-        STOP.wait(SCAN_INTERVAL)
+            logger.exception("alert delivery worker failed")
+        STOP.wait(90)
 
 
 @app.get("/health")
@@ -635,13 +651,18 @@ def add_source(request: Request, kind: str = Form(...), slug: str = Form(...), c
 
 def main():
     parser = argparse.ArgumentParser(description="JobHuntAI self-hosted Windows web server")
-    parser.add_argument("command", nargs="?", choices=["serve", "scan", "health"], default="serve")
+    parser.add_argument("command", nargs="?", choices=["serve", "scan", "health", "agent-status"], default="serve")
     parser.add_argument("--host", default=os.getenv("JOBHUNTAI_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("JOBHUNTAI_PORT", "8000")))
     args = parser.parse_args()
     initialize()
     if args.command == "scan":
         print(json.dumps(scan_all(), indent=2))
+        ai_engine.launch(ROOT)
+        print("OpenCode agent:", json.dumps(autonomy.evaluate(sys.modules[__name__])))
+        notify_matches()
+    elif args.command == "agent-status":
+        print(json.dumps(autonomy.status(sys.modules[__name__]), indent=2))
     elif args.command == "health":
         with database() as db:
             print(json.dumps([dict(x) for x in db.execute("SELECT company,kind,last_success,last_error FROM sources")], indent=2))
