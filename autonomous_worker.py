@@ -81,6 +81,9 @@ def candidates(ctx):
         jobs = db.execute("SELECT * FROM jobs WHERE active=1 AND published IS NOT NULL ORDER BY published DESC LIMIT 500").fetchall()
         for u in users:
             resume = db.execute("SELECT * FROM resumes WHERE user_id=? ORDER BY id DESC LIMIT 1", (u["id"],)).fetchone()
+            # Registration alone is not enough evidence for professional suitability.
+            if not resume and not str(u["skills"] or "").strip():
+                continue
             for j in jobs:
                 hard = ctx.match_job(u, j)
                 if hard is None:
@@ -90,8 +93,15 @@ def candidates(ctx):
                 row = db.execute("SELECT * FROM ai_reviews WHERE user_id=? AND job_id=?", (u["id"], j["id"])).fetchone()
                 if row and row["fingerprint"] == fp and row["state"] in ("approved", "rejected"):
                     continue
-                if row and row["fingerprint"] == fp and row["state"] == "error" and row["attempts"] >= 3:
-                    continue
+                if row and row["fingerprint"] == fp and row["state"] == "error":
+                    try:
+                        since = (ctx.utcnow() - datetime.fromisoformat(row["updated"])).total_seconds()
+                    except (ValueError, TypeError):
+                        since = 999999
+                    # Retry transient provider errors with backoff; never permanently abandon a job.
+                    delay = 600 if row["attempts"] <= 1 else 1800 if row["attempts"] == 2 else 43200
+                    if since < delay:
+                        continue
                 # Never allow a previous rule-only match to be presented as AI reviewed.
                 db.execute("DELETE FROM matches WHERE user_id=? AND job_id=?", (u["id"], j["id"]))
                 result.append((u, j, resume, hard, fp))
@@ -137,6 +147,10 @@ def evaluate(ctx, gateway=None, limit=5):
         }
         try:
             review = ai.verify(gateway.ask("job-matcher", payload), u["skills"], resume_text)
+            min_score = max(65, min(95, int(os.getenv("JOBHUNTAI_MIN_AI_SCORE", "78"))))
+            if review["eligible"] and review["score"] < min_score:
+                review["eligible"] = False
+                review["reason"] = "Below strict match threshold. " + review["reason"]
             with ctx.database() as db:
                 if review["eligible"]:
                     approved += 1
