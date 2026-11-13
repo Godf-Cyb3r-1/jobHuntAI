@@ -80,6 +80,10 @@ def candidates(ctx):
         users = db.execute("SELECT * FROM users ORDER BY id").fetchall()
         jobs = db.execute("SELECT * FROM jobs WHERE active=1 AND published IS NOT NULL ORDER BY published DESC LIMIT 500").fetchall()
         for u in users:
+            if not u["ai_consent"]:
+                # No profile data leaves the server without explicit consent.
+                db.execute("DELETE FROM matches WHERE user_id=?", (u["id"],))
+                continue
             resume = db.execute("SELECT * FROM resumes WHERE user_id=? ORDER BY id DESC LIMIT 1", (u["id"],)).fetchone()
             # Registration alone is not enough evidence for professional suitability.
             if not resume and not str(u["skills"] or "").strip():
@@ -140,7 +144,7 @@ def evaluate(ctx, gateway=None, limit=5):
         payload = {
             "decision": "Decide if responsibilities are a genuine professional match. Strict family filtering already passed. Reply JSON: eligible, score, reason, highlights, outreach. If unsure, reject.",
             "user_profile": {"role": u["role"], "skills": u["skills"],
-                             "preferences": u["notes"], "resume_evidence": ai.scrub(resume_text)},
+                             "preferences": ai.scrub(u["notes"]), "resume_evidence": ai.scrub(resume_text)},
             "job": {"title": j["title"], "company": j["company"],
                     "description": str(j["description"] or "")[:5000], "location": j["location"]},
             "deterministic": {"eligibility_passed": True, "rules_score": hard[0]}
