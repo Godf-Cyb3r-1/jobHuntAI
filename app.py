@@ -146,7 +146,7 @@ def require_user(request: Request):
 def frame(request: Request, title: str, body: str) -> HTMLResponse:
     user = current_user(request)
     links = ('<a href="/">Dashboard</a><a href="/jobs">Matching jobs</a><a href="/applications">Applications</a>'
-             '<a href="/profile">My profile</a><a href="/resumes">Resumes</a><a href="/settings">Settings</a>'
+             '<a href="/profile">My profile</a><a href="/resumes">Resumes</a><a href="/ai-status">AI Workers</a><a href="/settings">Settings</a>'
              '<a href="/logout">Sign out</a>') if user else '<a href="/login">Log in</a><a href="/register">Create account</a>'
     page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(title)} · JobHuntAI</title><style>
@@ -319,6 +319,7 @@ def notify_matches():
         rows = db.execute("""SELECT u.id AS uid,u.telegram_chat,j.id AS jid,j.company,j.title,j.url,m.score
           FROM matches m JOIN users u ON u.id=m.user_id JOIN jobs j ON j.id=m.job_id
           LEFT JOIN alerts a ON a.user_id=u.id AND a.job_id=j.id AND a.channel='telegram'
+          JOIN ai_reviews ar ON ar.user_id=m.user_id AND ar.job_id=m.job_id AND ar.state='approved'
           WHERE a.user_id IS NULL AND u.telegram_chat<>'' AND j.active=1 AND j.published IS NOT NULL
           ORDER BY m.score DESC LIMIT 40""").fetchall()
         for item in rows:
@@ -373,13 +374,18 @@ def home(request: Request):
     if not user:
         return frame(request, "Welcome", '<div class="card"><h1>Find only jobs that actually fit your career.</h1><p>Multi-user job discovery, strict freshness and role matching, resume management, and application tracking — hosted on your Windows server.</p><a class="btn" href="/register">Create account</a> <a class="btn secondary" href="/login">Log in</a></div>')
     with database() as db:
-        m = db.execute("SELECT COUNT(*) FROM matches WHERE user_id=?", (user["id"],)).fetchone()[0]
+        m = db.execute("SELECT COUNT(*) FROM matches m JOIN ai_reviews ar ON ar.user_id=m.user_id AND ar.job_id=m.job_id AND ar.state='approved' WHERE m.user_id=?", (user["id"],)).fetchone()[0]
         a = db.execute("SELECT COUNT(*) FROM applications WHERE user_id=?", (user["id"],)).fetchone()[0]
         s = db.execute("SELECT COUNT(*) FROM sources WHERE success=1").fetchone()[0]
         newest = db.execute("""SELECT j.title,j.company,j.id,m.score FROM matches m JOIN jobs j ON j.id=m.job_id
+                                  JOIN ai_reviews ar ON ar.user_id=m.user_id AND ar.job_id=m.job_id AND ar.state='approved'
                                   WHERE m.user_id=? ORDER BY j.published DESC LIMIT 5""", (user["id"],)).fetchall()
     rows = "".join(f'<p><a href="/jobs/{quote(j["id"],safe="")}">{escape(j["title"])} — {escape(j["company"])}</a> <span class="pill">{j["score"]}%</span></p>' for j in newest)
-    return frame(request, "Dashboard", f'<h1>Hello, {escape(user["name"])}.</h1><p>Only verified, strictly matching vacancies appear below. No sample counts are shown.</p><div class="cards"><div class="card"><div class="metric">{m}</div>Matching vacancies</div><div class="card"><div class="metric">{a}</div>Tracked applications</div><div class="card"><div class="metric">{s}</div>Healthy sources</div></div><div class="card"><h2>Fresh matching jobs</h2>{rows or "<p>No verified matches yet. Review your profile and source health.</p>"}<a href="/jobs">Browse all verified matches</a></div>')
+    ai_status = autonomy.status(sys.modules[__name__])
+    ai_banner = ('OpenCode is evaluating candidates automatically.' if ai_status["running"] else
+                 'OpenCode not ready: configure your free OpenRouter key in Settings. No unreviewed matches will be recommended.')
+
+    return frame(request, "Dashboard", f'<h1>Hello, {escape(user["name"])}.</h1><p>Only verified, strictly matching vacancies appear below. No sample counts are shown.</p><div class="cards"><div class="card"><div class="metric">{m}</div>Matching vacancies</div><div class="card"><div class="metric">{a}</div>Tracked applications</div><div class="card"><div class="metric">{s}</div>Healthy sources</div></div><div class="card"><h2>AI worker status</h2><p>{escape(ai_banner)}</p><a href="/ai-status">Agent activity and pending evaluations</a></div><div class="card"><h2>Fresh matching jobs</h2>{rows or "<p>No AI-approved matching vacancies yet. The autonomous engine continues discovering and evaluating.</p>"}<a href="/jobs">Browse all verified matches</a></div>')
 
 
 @app.get("/register")
@@ -468,6 +474,7 @@ def jobs_page(request: Request):
     user = require_user(request)
     with database() as db:
         rows = db.execute("""SELECT j.*,m.score,m.reason FROM matches m JOIN jobs j ON j.id=m.job_id
+            JOIN ai_reviews ar ON ar.user_id=m.user_id AND ar.job_id=m.job_id AND ar.state='approved'
             WHERE m.user_id=? AND j.active=1 ORDER BY j.published DESC LIMIT 200""", (user["id"],)).fetchall()
     body = '<h1>Verified matches</h1><p>Only active jobs within your freshness window and approved role families. Scores indicate matching signals, not hiring probability.</p>'
     for j in rows:
@@ -483,6 +490,7 @@ def job_page(job_id: str, request: Request):
     user = require_user(request)
     with database() as db:
         job = db.execute("""SELECT j.*,m.score,m.reason FROM jobs j JOIN matches m ON m.job_id=j.id
+                                 JOIN ai_reviews ar ON ar.user_id=m.user_id AND ar.job_id=m.job_id AND ar.state='approved'
                                  WHERE j.id=? AND m.user_id=? AND j.active=1""", (job_id, user["id"])).fetchone()
         applied = db.execute("SELECT * FROM applications WHERE user_id=? AND job_id=?", (user["id"], job_id)).fetchone()
     if not job:
