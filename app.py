@@ -493,14 +493,36 @@ def job_page(job_id: str, request: Request):
                                  JOIN ai_reviews ar ON ar.user_id=m.user_id AND ar.job_id=m.job_id AND ar.state='approved'
                                  WHERE j.id=? AND m.user_id=? AND j.active=1""", (job_id, user["id"])).fetchone()
         applied = db.execute("SELECT * FROM applications WHERE user_id=? AND job_id=?", (user["id"], job_id)).fetchone()
+        ai_review = db.execute("SELECT * FROM ai_reviews WHERE user_id=? AND job_id=? AND state='approved'", (user["id"], job_id)).fetchone()
+        ai_asset = db.execute("SELECT * FROM ai_assets WHERE user_id=? AND job_id=?", (user["id"], job_id)).fetchone()
     if not job:
         raise HTTPException(404, "No verified match found")
+    ai_draft = escape(ai_review["outreach"] if ai_review and ai_review["outreach"] else "No AI outreach draft has been generated.")
+    ai_doc_link = (f'<a class="btn secondary" href="/auto-resume/{quote(job_id,safe="")}">AI-prepared resume DOCX</a>' if ai_asset else '')
     return frame(request, job["title"], f'''<h1>{escape(job['title'])}</h1><p>{escape(job['company'])} · {escape(job['location'])} · {escape(job['published'])}</p>
       <p><span class="pill">{job['score']}% role fit</span> {escape(job['reason'])}</p>
-      <p><a class="btn" href="{escape(job['url'])}" target="_blank" rel="noopener noreferrer">Open original posting</a> <a class="btn secondary" href="/resume-tailor/{quote(job_id,safe='')}">Download factual tailored DOCX</a></p>
+      <p><a class="btn" href="{escape(job['url'])}" target="_blank" rel="noopener noreferrer">Open original posting</a> <a class="btn secondary" href="/resume-tailor/{quote(job_id,safe='')}">Download factual tailored DOCX</a> {ai_doc_link}</p>
       <div class="card"><h2>Job description</h2><div class="desc">{escape(re.sub('<[^>]+>', ' ', job['description'] or ''))}</div></div>
       <div class="card"><h2>Track your application</h2><form method="post" action="/apply/{quote(job_id,safe='')}">{csrf(request)}<label>Status</label><select name="status">{''.join(f'<option {"selected" if applied and applied["status"]==s else ""}>{s}</option>' for s in ['Saved','Applied','Under review','Assessment','Interview','Offer','Rejected','Withdrawn'])}</select><label>Notes / recruiter response</label><textarea name="notes">{escape(applied['notes'] if applied else '')}</textarea><p><button>Save status</button></p></form></div>
-      <div class="card"><h2>Outreach draft</h2><p>Hi, I came across the {escape(job['title'])} opening at {escape(job['company'])}. My professional experience is in {escape(user['role'])}, and the role looks relevant to my background. I would appreciate an opportunity to discuss whether my profile may be suitable. I can share my resume for reference. Thank you.</p><p class="small">Draft only. Review for accuracy before sending.</p></div>''')
+      <div class="card"><h2>OpenCode outreach draft</h2><div class="desc">{ai_draft}</div><p class="small">AI-prepared draft only. Review all claims before sending.</p></div>''')
+
+
+@app.get("/auto-resume/{job_id:path}")
+def auto_resume_download(job_id: str, request: Request):
+    u = require_user(request)
+    with database() as db:
+        row = db.execute("""SELECT a.path FROM ai_assets a JOIN ai_reviews r
+            ON r.user_id=a.user_id AND r.job_id=a.job_id
+            WHERE a.user_id=? AND a.job_id=? AND r.state='approved'""",
+            (u["id"], job_id)).fetchone()
+    if not row:
+        raise HTTPException(404, "No AI-prepared resume for this job")
+    base = (ROOT / "auto_resumes" / str(u["id"])).resolve()
+    dest = Path(row["path"]).resolve()
+    if base not in dest.parents or not dest.is_file():
+        raise HTTPException(404, "Resume unavailable")
+    return Response(dest.read_bytes(), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": "attachment; filename=jobhuntai-tailored-resume.docx"})
 
 
 @app.post("/apply/{job_id:path}")
