@@ -92,6 +92,8 @@ def initialize():
     with database() as db:
         db.executescript(SCHEMA)
         autonomy.setup(db)
+        if "ai_consent" not in [row["name"] for row in db.execute("PRAGMA table_info(users)")]:
+            db.execute("ALTER TABLE users ADD COLUMN ai_consent INTEGER NOT NULL DEFAULT 0")
         db.execute("CREATE TABLE IF NOT EXISTS telegram_poll_state (name TEXT PRIMARY KEY, value INTEGER NOT NULL)")
         if not db.execute("SELECT COUNT(*) FROM sources").fetchone()[0]:
             # Only examples. Every source's health is confirmed by the first scan.
@@ -461,18 +463,21 @@ def home(request: Request):
 
 @app.get("/register")
 def register_page(request: Request):
-    return frame(request, "Register", f'<div class="card"><h1>Create an account</h1><form method="post" action="/register">{csrf(request)}<label>Name</label><input name="name" required maxlength="100"><label>Email</label><input type="email" name="email" required maxlength="150"><label>Password (12+ characters)</label><input type="password" name="password" minlength="12" required><p>Use a unique password. Your registration does not expose your resume to other users.</p><button>Create account</button></form></div>')
+    return frame(request, "Register", f'<div class="card"><h1>Create an account</h1><form method="post" action="/register">{csrf(request)}<label>Name</label><input name="name" required maxlength="100"><label>Email</label><input type="email" name="email" required maxlength="150"><label>Password (12+ characters)</label><input type="password" name="password" minlength="12" required><p>Use a unique password. Your resume is kept private from other users.</p>
+<label><input type="checkbox" name="ai_consent" value="yes" required style="width:auto">
+I agree that relevant resume excerpts, verified skills and preferences may be sent to my chosen third-party AI provider for job matching and resume drafting.</label>
+<button>Create account</button></form></div>')
 
 
 @app.post("/register")
-def register(request: Request, name: str = Form(...), email: str = Form(...), password: str = Form(...), csrf_token: str = Form("", alias="csrf")):
+def register(request: Request, name: str = Form(...), email: str = Form(...), password: str = Form(...), ai_consent: str = Form(""), csrf_token: str = Form("", alias="csrf")):
     check_csrf(request, csrf_token)
-    if len(password) < 12 or len(name) > 100 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+    if ai_consent != "yes" or len(password) < 12 or len(name) > 100 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise HTTPException(400, "Invalid registration fields")
     with database() as db:
         try:
             admin = int(db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0)
-            cur = db.execute("INSERT INTO users(email,pwd,name,role,admin) VALUES(?,?,?,?,?)",
+            cur = db.execute("INSERT INTO users(email,pwd,name,role,admin,ai_consent) VALUES(?,?,?,?,?,1)",
                              (email.lower().strip(), password_hash(password), name.strip(), "appsec,pentest", admin))
             request.session.clear()
             request.session["uid"] = cur.lastrowid
@@ -514,11 +519,13 @@ def profile_page(request: Request):
     <label>Freshness limit (days)</label><select name="freshness">{''.join(f'<option value="{d}" {"selected" if u["freshness"] == d else ""}>{d} days</option>' for d in [1,2,3,7,14,21,28,30])}</select>
     <label>LinkedIn public profile URL</label><input name="linkedin" value="{escape(u['linkedin'])}" maxlength="500">
     <label>Custom preferences (notes; advisory, not a substitute for hard filters)</label><textarea name="notes">{escape(u['notes'])}</textarea>
+    <label><input type="checkbox" style="width:auto" name="ai_consent" value="yes" {"checked" if u["ai_consent"] else ""}>
+    Enable external AI matching for my verified profile and resume excerpts</label>
     <button>Save profile</button></form></div>''')
 
 
 @app.post("/profile")
-def profile_save(request: Request, role: str = Form(...), skills: str = Form(""), locations: str = Form(""), freshness: int = Form(7), linkedin: str = Form(""), notes: str = Form(""), csrf_token: str = Form("", alias="csrf")):
+def profile_save(request: Request, role: str = Form(...), skills: str = Form(""), locations: str = Form(""), freshness: int = Form(7), linkedin: str = Form(""), notes: str = Form(""), ai_consent: str = Form(""), csrf_token: str = Form("", alias="csrf")):
     u = require_user(request)
     check_csrf(request, csrf_token)
     tokens = set(x.strip().lower() for x in role.split(","))
@@ -527,16 +534,13 @@ def profile_save(request: Request, role: str = Form(...), skills: str = Form("")
     if linkedin and not linkedin.startswith("https://www.linkedin.com/"):
         raise HTTPException(400, "Use a public LinkedIn HTTPS URL")
     with database() as db:
-        db.execute("UPDATE users SET role=?,skills=?,locations=?,freshness=?,linkedin=?,notes=? WHERE id=?",
-                   (",".join(sorted(tokens)), skills[:3000], locations[:300], freshness, linkedin[:500], notes[:2000], u["id"]))
+        db.execute("UPDATE users SET role=?,skills=?,locations=?,freshness=?,linkedin=?,notes=?,ai_consent=? WHERE id=?",
+                   (",".join(sorted(tokens)), skills[:3000], locations[:300], freshness,
+                    linkedin[:500], notes[:2000], int(ai_consent == "yes"), u["id"]))
+        # Profile changes invalidate prior AI reviews; the supervisor will re-evaluate.
         db.execute("DELETE FROM matches WHERE user_id=?", (u["id"],))
-        jobs = db.execute("SELECT * FROM jobs WHERE active=1").fetchall()
-        new_user = db.execute("SELECT * FROM users WHERE id=?", (u["id"],)).fetchone()
-        for job in jobs:
-            result = match_job(new_user, job)
-            if result:
-                db.execute("INSERT INTO matches(user_id,job_id,score,reason,created) VALUES(?,?,?,?,?)",
-                           (u["id"], job["id"], result[0], result[1], iso()))
+        db.execute("DELETE FROM ai_reviews WHERE user_id=?", (u["id"],))
+        db.execute("DELETE FROM ai_assets WHERE user_id=?", (u["id"],))
     return redirect("/")
 
 
@@ -664,6 +668,9 @@ async def resume_upload(request: Request, file: UploadFile = File(...), csrf_tok
     with database() as db:
         db.execute("INSERT INTO resumes(user_id,filename,filepath,extracted,created) VALUES(?,?,?,?,?)",
                    (user["id"], name[:150], str(file_path), text[:50000], iso()))
+        db.execute("DELETE FROM matches WHERE user_id=?", (user["id"],))
+        db.execute("DELETE FROM ai_reviews WHERE user_id=?", (user["id"],))
+        db.execute("DELETE FROM ai_assets WHERE user_id=?", (user["id"],))
     return redirect("/resumes")
 
 
