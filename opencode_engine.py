@@ -101,8 +101,11 @@ def launch(root, port=4096):
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            _RUNNING = subprocess.Popen([str(exe), "serve", "--hostname", "127.0.0.1", "--port", str(port)], cwd=str(sandbox), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
-            LOG.info("OpenCode started as pid %s", _RUNNING.pid)
+            log_path = Path(root) / "opencode-server.log"
+            with log_path.open("ab") as stream:
+                _RUNNING = subprocess.Popen([str(exe), "serve", "--hostname", "127.0.0.1", "--port", str(port)], cwd=str(sandbox), env=env,
+                                            stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT, **kwargs)
+            LOG.info("OpenCode started as pid %s; logs at %s", _RUNNING.pid, log_path)
             return ""
         except OSError as exc:
             LOG.error("Could not start OpenCode: %s", exc)
