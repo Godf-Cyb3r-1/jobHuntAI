@@ -33,6 +33,10 @@ try:
         response = client.post("http://127.0.0.1:43871/session", json={"title": "JobHuntAI v1 server test"})
         assert response.status_code in (200, 201), (response.status_code, response.text[:500])
         assert response.json().get("id"), "Session creation failed"
+        mcp_response = client.get("http://127.0.0.1:43871/mcp")
+        print("OpenCode MCP status:", mcp_response.status_code, mcp_response.text[:500])
+        agent_response = client.get("http://127.0.0.1:43871/agent")
+        print("OpenCode agent status:", agent_response.status_code, agent_response.text[:500])
     print("OpenCode v1 server, authenticated health, and session creation verified")
 finally:
     if oc._RUNNING is not None:
