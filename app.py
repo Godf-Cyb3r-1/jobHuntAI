@@ -645,6 +645,21 @@ def settings_page(request: Request):
     body = f'''<h1>Settings</h1><div class="card"><h2>Telegram alerts</h2><p>Start your Telegram bot and enter its numeric chat ID. Set JOBHUNTAI_TELEGRAM_TOKEN in your server environment.</p>
        <form method="post" action="/settings/telegram">{csrf(request)}<label>Telegram chat ID</label><input name="chat_id" value="{escape(u['telegram_chat'])}" pattern="-?[0-9]{{4,20}}" placeholder="123456789"><p><button>Save notification setting</button></p></form></div>'''
     if u["admin"]:
+        ai_state = autonomy.status(sys.modules[__name__])
+        body += f'''<div class="card"><h2>Autonomous OpenCode AI engine</h2>
+        <p>AI state: <strong>{"Running" if ai_state["running"] else "Waiting for key/model connection"}</strong>.
+        Model: {escape(ai_state["model"])}. Free AI calls today: {ai_state["calls_today"]}.
+        Job discovery continues during AI outages; new recommendations require an AI-approved match.</p>
+        <form method="post" action="/settings/openrouter">{csrf(request)}
+        <label>OpenRouter API key (saved only on this Windows server)</label>
+        <input type="password" name="api_key" autocomplete="new-password" maxlength="250"
+               placeholder="Leave blank to preserve existing key">
+        <label>OpenCode model (provider/model)</label>
+        <input name="model" value="{escape(ai_state["model"])}" maxlength="130" required>
+        <p class="small">An OpenRouter free model must be available. Existing workers restart their connection after a server restart.
+        API-key usage is limited by the provider.</p>
+        <button>Save OpenCode settings</button></form>
+        <p><a href="/ai-status">View agent progress and failures</a></p></div>'''
         body += f'''<div class="card"><h2>ATS company registry (administrator)</h2><form method="post" action="/settings/source">{csrf(request)}
            <label>ATS provider</label><select name="kind"><option>ashby</option><option>greenhouse</option><option>lever</option></select>
            <label>Board slug (not URL)</label><input name="slug" pattern="[A-Za-z0-9_-]{{2,80}}" required>
@@ -653,8 +668,74 @@ def settings_page(request: Request):
         for s in sources:
             body += f'<p>{escape(s["company"])} — {escape(s["kind"])}/{escape(s["slug"])} · {"Healthy" if s["success"] else "Not verified"} · <span class="small">{escape(s["last_error"])}</span></p>'
         body += '</div>'
-    body += '<div class="card"><h2>Integration status</h2><p>OpenCode v1: optional separately bundled runtime; browser AI automation is not enabled by default. Telegram: ' + ('configured' if os.getenv('JOBHUNTAI_TELEGRAM_TOKEN') else 'needs token') + '. WhatsApp and mailbox OAuth are not connected in this version.</p></div>'
+    body += '<div class="card"><h2>Integrations</h2><p>OpenCode v1 is now the required AI matching and resume/outreach engine. Telegram: ' + ('configured' if os.getenv('JOBHUNTAI_TELEGRAM_TOKEN') else 'needs token') + '. WhatsApp and mailbox OAuth remain unconnected.</p></div>'
     return frame(request, "Settings", body)
+
+
+@app.post("/settings/openrouter")
+def configure_opencode(request: Request, api_key: str = Form(""), model: str = Form(""),
+                       csrf_token: str = Form("", alias="csrf")):
+    u = require_user(request)
+    check_csrf(request, csrf_token)
+    if not u["admin"]:
+        raise HTTPException(403, "Administrator only")
+    if not re.fullmatch(r"openrouter/[a-zA-Z0-9_./:-]{4,110}", model):
+        raise HTTPException(400, "For this bootstrap release, use a valid OpenRouter model ID")
+    if api_key:
+        if len(api_key) < 20 or len(api_key) > 250 or "\n" in api_key or "\r" in api_key:
+            raise HTTPException(400, "Invalid OpenRouter API key")
+        (ROOT / "openrouter.key").write_text(api_key, encoding="utf-8")
+    (ROOT / "opencode-model").write_text(model, encoding="utf-8")
+    return redirect("/ai-status")
+
+
+@app.get("/ai-status")
+def ai_status_page(request: Request):
+    u = require_user(request)
+    state = autonomy.status(sys.modules[__name__])
+    with database() as db:
+        rows = db.execute("SELECT state, COUNT(*) AS count FROM ai_reviews WHERE user_id=? GROUP BY state",
+                          (u["id"],)).fetchall()
+    progress = ", ".join(f'{escape(r["state"])}: {r["count"]}' for r in rows) or "No candidate reviews recorded yet."
+    html_page = (
+        '<h1>Autonomous agent workers</h1>'
+        '<p>Collector → Discoverer → OpenCode matcher → Resume and outreach writer → Notifications.</p>'
+        '<div class="cards">'
+        f'<div class="card"><h2>OpenCode v1</h2><p>{"Online" if state["running"] else "Offline / waiting"}</p>'
+        f'<p>Model: {escape(state["model"])}</p></div>'
+        f'<div class="card"><h2>Free AI budget</h2><p>{state["calls_today"]} calls today</p></div>'
+        f'<div class="card"><h2>My evaluations</h2><p>{progress}</p></div></div>'
+    )
+    if u["admin"]:
+        events = "".join(
+            f'<p>{escape(e["event_time"])} · {escape(e["worker"])} · {escape(e["state"])} — {escape(e["detail"])}</p>'
+            for e in state["events"]
+        )
+        html_page += ('<div class="card"><h2>Worker activity</h2>' + (events or "<p>No events yet.</p>") + '</div>')
+        html_page += f'''<form method="post" action="/ai-status/run">{csrf(request)}
+            <button>Run autonomous cycle now (diagnostic)</button></form>'''
+    if not state["key_set"]:
+        html_page += '<div class="card"><p>Administrator setup needed: save an OpenRouter free-model key in Settings. No AI reviews will be fabricated while the provider is unavailable.</p></div>'
+    return frame(request, "AI workers", html_page)
+
+
+@app.post("/ai-status/run")
+def run_agents_now(request: Request, csrf_token: str = Form("", alias="csrf")):
+    u = require_user(request)
+    check_csrf(request, csrf_token)
+    if not u["admin"]:
+        raise HTTPException(403, "Administrator only")
+    # Non-blocking. The regular autonomous supervisor continues without UI interaction.
+    def cycle():
+        try:
+            scan_all()
+            ai_engine.launch(ROOT)
+            autonomy.evaluate(sys.modules[__name__], limit=5)
+            notify_matches()
+        except Exception:
+            logger.exception("Admin-requested autonomous cycle failed")
+    threading.Thread(target=cycle, daemon=True, name="adhoc-ai-cycle").start()
+    return redirect("/ai-status")
 
 
 @app.post("/settings/telegram")
