@@ -7,8 +7,10 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+import sys
 
 base = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(base))
 binary = base / "opencode-v1.exe"
 if not binary.exists():
     raise RuntimeError("Missing native OpenCode v1 binary for integration test")
