@@ -92,6 +92,7 @@ def initialize():
     with database() as db:
         db.executescript(SCHEMA)
         autonomy.setup(db)
+        db.execute("CREATE TABLE IF NOT EXISTS telegram_poll_state (name TEXT PRIMARY KEY, value INTEGER NOT NULL)")
         if not db.execute("SELECT COUNT(*) FROM sources").fetchone()[0]:
             # Only examples. Every source's health is confirmed by the first scan.
             db.executemany("INSERT INTO sources(kind,slug,company) VALUES(?,?,?)", [
@@ -302,8 +303,14 @@ def scan_all():
     return stats
 
 
+def telegram_token():
+    token_file = ROOT / "telegram.token"
+    return os.getenv("JOBHUNTAI_TELEGRAM_TOKEN", "").strip() or (
+        token_file.read_text(encoding="utf-8").strip() if token_file.exists() else "")
+
+
 def send_telegram(chat_id: str, message: str) -> bool:
-    token = os.getenv("JOBHUNTAI_TELEGRAM_TOKEN", "")
+    token = telegram_token()
     if not token or not chat_id:
         return False
     try:
@@ -313,6 +320,63 @@ def send_telegram(chat_id: str, message: str) -> bool:
     except Exception as exc:
         logger.warning("telegram delivery failed: %s", type(exc).__name__)
         return False
+
+
+def telegram_poll():
+    """Poll user commands without inbound ports or external Telegram hosting."""
+    token = telegram_token()
+    if not token:
+        return
+    with database() as db:
+        row = db.execute("SELECT value FROM telegram_poll_state WHERE name='offset'").fetchone()
+        offset = row["value"] if row else 0
+    try:
+        response = httpx.get("https://api.telegram.org/bot" + token + "/getUpdates",
+                             params={"offset": offset, "timeout": 4, "allowed_updates": '["message"]'},
+                             timeout=9)
+        response.raise_for_status()
+        updates = response.json()
+        if not updates.get("ok"):
+            return
+    except (httpx.HTTPError, ValueError):
+        logger.warning("Telegram polling unavailable")
+        return
+    for update in updates.get("result", [])[:100]:
+        next_offset = int(update.get("update_id", 0)) + 1
+        message = update.get("message") or {}
+        chat = message.get("chat") or {}
+        chat_id = str(chat.get("id") or "")
+        content = str(message.get("text") or "").strip()
+        if chat_id and content.startswith("/start "):
+            code = content.split(None, 1)[1].strip().split()[0]
+            if re.fullmatch(r"[A-Za-z0-9_-]{12,36}", code):
+                with database() as db:
+                    user = db.execute("SELECT id FROM users WHERE link_code=?", (code,)).fetchone()
+                    if user:
+                        db.execute("UPDATE users SET telegram_chat=?, link_code=NULL WHERE id=?",
+                                   (chat_id, user["id"]))
+                if user:
+                    send_telegram(chat_id, "Your JobHuntAI account is now linked. You'll receive only AI-approved matching vacancies. Type /jobs to see recent matches.")
+        elif chat_id and content.startswith("/jobs"):
+            with database() as db:
+                owner = db.execute("SELECT id FROM users WHERE telegram_chat=?", (chat_id,)).fetchone()
+                matches = db.execute("""SELECT j.title,j.company,j.url FROM matches m
+                    JOIN jobs j ON j.id=m.job_id JOIN ai_reviews ar ON ar.user_id=m.user_id
+                    AND ar.job_id=m.job_id AND ar.state='approved'
+                    WHERE m.user_id=? AND j.active=1 ORDER BY j.published DESC LIMIT 5""",
+                    (owner["id"],)).fetchall() if owner else []
+            text = "\n\n".join(f'{j["title"]} — {j["company"]}\n{j["url"]}' for j in matches)
+            send_telegram(chat_id, text or "No AI-approved current matches yet. JobHuntAI is monitoring.")
+        elif chat_id and content.startswith("/status"):
+            with database() as db:
+                owner = db.execute("SELECT id FROM users WHERE telegram_chat=?", (chat_id,)).fetchone()
+                count = db.execute("""SELECT COUNT(*) FROM matches m
+                    JOIN ai_reviews ar ON ar.user_id=m.user_id AND ar.job_id=m.job_id
+                    WHERE m.user_id=? AND ar.state='approved'""", (owner["id"],)).fetchone()[0] if owner else 0
+            send_telegram(chat_id, f"JobHuntAI: {count} AI-approved jobs currently tracked." if owner else "Link your account from the JobHuntAI web Settings page.")
+        with database() as db:
+            db.execute("""INSERT INTO telegram_poll_state(name,value) VALUES('offset',?)
+                ON CONFLICT(name) DO UPDATE SET value=excluded.value""", (next_offset,))
 
 
 def notify_matches():
@@ -361,8 +425,9 @@ def runner():
             logger.exception("OpenCode matching worker failed")
         try:
             notify_matches()
+            telegram_poll()
         except Exception:
-            logger.exception("alert delivery worker failed")
+            logger.exception("notification worker failed")
         STOP.wait(90)
 
 
