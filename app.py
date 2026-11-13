@@ -405,20 +405,21 @@ def runner():
             ai_engine.launch(ROOT)
         except Exception:
             logger.exception("OpenCode server supervisor failed")
-        if current >= next_discovery:
-            try:
-                autonomy.discover(sys.modules[__name__], gateway=ai_engine.Gateway(ROOT) if ai_engine.ready(ROOT) else None)
-            except Exception:
-                logger.exception("autonomous discovery worker failed")
-            next_discovery = current + 12 * 3600
         if current >= next_scan:
             try:
                 scan_all()
             except Exception:
                 logger.exception("job-fetching worker failed")
             next_scan = current + SCAN_INTERVAL
+        if current >= next_discovery:
+            def expand_registry():
+                try:
+                    autonomy.discover(sys.modules[__name__], gateway=ai_engine.Gateway(ROOT) if ai_engine.ready(ROOT) else None)
+                except Exception:
+                    logger.exception("autonomous discovery worker failed")
+            threading.Thread(target=expand_registry, name="ats-discovery", daemon=True).start()
+            next_discovery = current + 12 * 3600
         try:
-            ai_engine.launch(ROOT)
             result = autonomy.evaluate(sys.modules[__name__], limit=5)
             logger.info("OpenCode autonomous evaluation: %s", result)
         except Exception:
