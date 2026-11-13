@@ -465,10 +465,15 @@ def home(request: Request):
 
 @app.get("/register")
 def register_page(request: Request):
-    return frame(request, "Register", f'<div class="card"><h1>Create an account</h1><form method="post" action="/register">{csrf(request)}<label>Name</label><input name="name" required maxlength="100"><label>Email</label><input type="email" name="email" required maxlength="150"><label>Password (12+ characters)</label><input type="password" name="password" minlength="12" required><p>Use a unique password. Your resume is kept private from other users.</p>
-<label><input type="checkbox" name="ai_consent" value="yes" required style="width:auto">
-I agree that relevant resume excerpts, verified skills and preferences may be sent to my chosen third-party AI provider for job matching and resume drafting.</label>
-<button>Create account</button></form></div>')
+    return frame(request, "Register", f'''<div class="card"><h1>Create an account</h1>
+      <form method="post" action="/register">{csrf(request)}
+      <label>Name</label><input name="name" required maxlength="100">
+      <label>Email</label><input type="email" name="email" required maxlength="150">
+      <label>Password (12+ characters)</label><input type="password" name="password" minlength="12" required>
+      <p>Use a unique password. Your resume is kept private from other users.</p>
+      <label><input type="checkbox" name="ai_consent" value="yes" required style="width:auto">
+      I agree that relevant resume excerpts, verified skills and preferences may be sent to the selected third-party AI provider for matching and drafting.</label>
+      <button>Create account</button></form></div>''')
 
 
 @app.post("/register")
