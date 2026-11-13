@@ -22,7 +22,7 @@ import autonomous_worker as worker
 
 def seed(title="Application Security Engineer", role="appsec,pentest", name="appsec"):
     with app.database() as db:
-        uid = db.execute("INSERT INTO users(email,pwd,name,role,skills,freshness,locations) VALUES(?,?,?,?,?,?,?)",
+        uid = db.execute("INSERT INTO users(email,pwd,name,role,skills,freshness,locations,ai_consent) VALUES(?,?,?,?,?,?,?,1)",
                          (name + "@test.example", "hash", "Test User", role, "Burp Suite", 3, "Chennai")).lastrowid
         sid = db.execute("SELECT id FROM sources LIMIT 1").fetchone()[0]
         jid = "test:" + name
