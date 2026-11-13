@@ -41,6 +41,10 @@ jobs:
           & $binary.FullName --version
           if ($LASTEXITCODE -ne 0) { throw 'OpenCode binary smoke test failed' }
           Copy-Item $binary.FullName opencode-v1.exe
+      - name: Native OpenCode v1 server + session + MCP smoke test
+        shell: pwsh
+        run: |
+          python tests/smoke_opencode_runtime.py
       - name: Package portable distribution
         shell: pwsh
         run: |
