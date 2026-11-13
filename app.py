@@ -712,8 +712,16 @@ def settings_page(request: Request):
     u = require_user(request)
     with database() as db:
         sources = db.execute("SELECT * FROM sources ORDER BY company").fetchall() if u["admin"] else []
-    body = f'''<h1>Settings</h1><div class="card"><h2>Telegram alerts</h2><p>Start your Telegram bot and enter its numeric chat ID. Set JOBHUNTAI_TELEGRAM_TOKEN in your server environment.</p>
-       <form method="post" action="/settings/telegram">{csrf(request)}<label>Telegram chat ID</label><input name="chat_id" value="{escape(u['telegram_chat'])}" pattern="-?[0-9]{{4,20}}" placeholder="123456789"><p><button>Save notification setting</button></p></form></div>'''
+        link_code = u["link_code"] or secrets.token_urlsafe(16)
+        if not u["link_code"]:
+            db.execute("UPDATE users SET link_code=? WHERE id=?", (link_code, u["id"]))
+    body = f'''<h1>Settings</h1><div class="card"><h2>Telegram alerts</h2>
+       <p>Open the configured JobHuntAI Telegram bot and send <strong>/start {escape(link_code)}</strong> once to link your account.
+       Then the autonomous server sends relevant AI-approved opportunities automatically.</p>
+       <p>Linked chat: {"Connected" if u["telegram_chat"] else "Not connected"}. Commands: /jobs and /status.</p>
+       <form method="post" action="/settings/link-code">{csrf(request)}<button>Generate fresh linking code</button></form>
+       <p class="small">Optional legacy setup:</p>
+       <form method="post" action="/settings/telegram">{csrf(request)}<label>Existing Telegram chat ID</label><input name="chat_id" value="{escape(u['telegram_chat'])}" pattern="-?[0-9]{{4,20}}" placeholder="Leave blank to use one-time linking code"><p><button>Save chat ID</button></p></form></div>'''
     if u["admin"]:
         ai_state = autonomy.status(sys.modules[__name__])
         body += f'''<div class="card"><h2>Autonomous OpenCode AI engine</h2>
@@ -730,6 +738,12 @@ def settings_page(request: Request):
         API-key usage is limited by the provider.</p>
         <button>Save OpenCode settings</button></form>
         <p><a href="/ai-status">View agent progress and failures</a></p></div>'''
+        body += f'''<div class="card"><h2>Telegram bot configuration (admin)</h2>
+            <p>Save the token from BotFather once. The server will poll Telegram using outbound HTTPS and deliver alerts without a domain or webhook.</p>
+            <form method="post" action="/settings/telegram-token">{csrf(request)}
+            <label>Telegram Bot API token</label><input type="password" name="token" maxlength="150" autocomplete="new-password"
+             placeholder="Leave blank to keep current token">
+            <button>Save bot token</button></form></div>'''
         body += f'''<div class="card"><h2>ATS company registry (administrator)</h2><form method="post" action="/settings/source">{csrf(request)}
            <label>ATS provider</label><select name="kind"><option>ashby</option><option>greenhouse</option><option>lever</option></select>
            <label>Board slug (not URL)</label><input name="slug" pattern="[A-Za-z0-9_-]{{2,80}}" required>
@@ -806,6 +820,30 @@ def run_agents_now(request: Request, csrf_token: str = Form("", alias="csrf")):
             logger.exception("Admin-requested autonomous cycle failed")
     threading.Thread(target=cycle, daemon=True, name="adhoc-ai-cycle").start()
     return redirect("/ai-status")
+
+
+@app.post("/settings/link-code")
+def new_link_code(request: Request, csrf_token: str = Form("", alias="csrf")):
+    user = require_user(request)
+    check_csrf(request, csrf_token)
+    code = secrets.token_urlsafe(16)
+    with database() as db:
+        db.execute("UPDATE users SET link_code=? WHERE id=?", (code, user["id"]))
+    return redirect("/settings")
+
+
+@app.post("/settings/telegram-token")
+def configure_telegram_token(request: Request, token: str = Form(""),
+                             csrf_token: str = Form("", alias="csrf")):
+    user = require_user(request)
+    check_csrf(request, csrf_token)
+    if not user["admin"]:
+        raise HTTPException(403, "Administrator only")
+    if token:
+        if not re.fullmatch(r"\d{6,20}:[A-Za-z0-9_-]{25,110}", token):
+            raise HTTPException(400, "Invalid Telegram Bot API token format")
+        (ROOT / "telegram.token").write_text(token, encoding="utf-8")
+    return redirect("/settings")
 
 
 @app.post("/settings/telegram")
