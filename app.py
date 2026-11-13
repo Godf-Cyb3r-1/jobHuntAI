@@ -29,6 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import opencode_engine as ai_engine
 import autonomous_worker as autonomy
+import mcp_bridge
 
 VERSION = "0.2.0"
 ROOT = Path(os.getenv("JOBHUNTAI_HOME") or Path(os.getenv("LOCALAPPDATA") or Path.home()) / "JobHuntAI")
@@ -336,9 +337,13 @@ def runner():
     next_discovery = 0
     while not STOP.is_set():
         current = time.monotonic()
+        try:
+            ai_engine.launch(ROOT)
+        except Exception:
+            logger.exception("OpenCode server supervisor failed")
         if current >= next_discovery:
             try:
-                autonomy.discover(sys.modules[__name__])
+                autonomy.discover(sys.modules[__name__], gateway=ai_engine.Gateway(ROOT) if ai_engine.ready(ROOT) else None)
             except Exception:
                 logger.exception("autonomous discovery worker failed")
             next_discovery = current + 12 * 3600
@@ -762,12 +767,14 @@ def add_source(request: Request, kind: str = Form(...), slug: str = Form(...), c
 
 def main():
     parser = argparse.ArgumentParser(description="JobHuntAI self-hosted Windows web server")
-    parser.add_argument("command", nargs="?", choices=["serve", "scan", "health", "agent-status"], default="serve")
+    parser.add_argument("command", nargs="?", choices=["serve", "scan", "health", "agent-status", "mcp"], default="serve")
     parser.add_argument("--host", default=os.getenv("JOBHUNTAI_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("JOBHUNTAI_PORT", "8000")))
     args = parser.parse_args()
     initialize()
-    if args.command == "scan":
+    if args.command == "mcp":
+        mcp_bridge.serve(sys.modules[__name__])
+    elif args.command == "scan":
         print(json.dumps(scan_all(), indent=2))
         ai_engine.launch(ROOT)
         print("OpenCode agent:", json.dumps(autonomy.evaluate(sys.modules[__name__])))
