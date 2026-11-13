@@ -455,8 +455,10 @@ def home(request: Request):
                                   WHERE m.user_id=? ORDER BY j.published DESC LIMIT 5""", (user["id"],)).fetchall()
     rows = "".join(f'<p><a href="/jobs/{quote(j["id"],safe="")}">{escape(j["title"])} — {escape(j["company"])}</a> <span class="pill">{j["score"]}%</span></p>' for j in newest)
     ai_status = autonomy.status(sys.modules[__name__])
-    ai_banner = ('OpenCode is evaluating candidates automatically.' if ai_status["running"] else
-                 'OpenCode not ready: configure your free OpenRouter key in Settings. No unreviewed matches will be recommended.')
+    ai_banner = ('AI consent is disabled for this account. Enable it in My Profile to start automatic evaluation.'
+                 if not user["ai_consent"] else
+                 ('OpenCode is evaluating candidates automatically.' if ai_status["running"] else
+                  'OpenCode not ready: the server administrator must configure a free OpenRouter key in Settings.'))
 
     return frame(request, "Dashboard", f'<h1>Hello, {escape(user["name"])}.</h1><p>Only verified, strictly matching vacancies appear below. No sample counts are shown.</p><div class="cards"><div class="card"><div class="metric">{m}</div>Matching vacancies</div><div class="card"><div class="metric">{a}</div>Tracked applications</div><div class="card"><div class="metric">{s}</div>Healthy sources</div></div><div class="card"><h2>AI worker status</h2><p>{escape(ai_banner)}</p><a href="/ai-status">Agent activity and pending evaluations</a></div><div class="card"><h2>Fresh matching jobs</h2>{rows or "<p>No AI-approved matching vacancies yet. The autonomous engine continues discovering and evaluating.</p>"}<a href="/jobs">Browse all verified matches</a></div>')
 
