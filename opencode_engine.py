@@ -69,15 +69,25 @@ def launch(root, port=4096):
             return ""
         sandbox = Path(root) / "agent-workspace"
         sandbox.mkdir(parents=True, exist_ok=True)
+        mcp_command = ([str(sys.executable), "mcp"] if getattr(sys, "frozen", False)
+                       else [str(sys.executable), str(Path(__file__).resolve().parent / "app.py"), "mcp"])
         cfg = {
             "$schema": "https://opencode.ai/config.json",
             "model": model(root),
             "autoupdate": False,
+            "mcp": {
+                "jobhunt": {"type": "local", "command": mcp_command, "enabled": True}
+            },
             "agent": {
                 name: {
                     "mode": "primary",
                     "prompt": description,
-                    "permission": {"bash": "deny", "edit": "deny", "read": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny", "external_directory": "deny"}
+                    "permission": {"bash": "deny", "edit": "deny", "read": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny", "external_directory": "deny"},
+                    "tools": {
+                        "jobhunt_public_jobs": name == "job-discovery",
+                        "jobhunt_source_health": name == "job-discovery",
+                        "jobhunt_verify_public_board": name == "job-discovery"
+                    }
                 } for name, description in PROMPTS.items()
             }
         }
