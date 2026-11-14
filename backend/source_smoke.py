@@ -7,6 +7,9 @@ from app.catalog import ATS
 from app.core import fetch_greenhouse,fetch_lever
 from app.discovery import fetch_ashby
 from app.smartrecruiters import fetch_smartrecruiters
+from app.core import role_matches,DEFAULT_PROFILE,posted_recent
+from app.pipeline import in_region
+import xml.etree.ElementTree as ET
 
 async def main():
     report=[]
@@ -20,19 +23,49 @@ async def main():
                 elif kind=="ashby":stream=fetch_ashby(client,name)
                 elif kind=="smartrecruiters":stream=fetch_smartrecruiters(client,name)
                 else:continue
-                count=0;relevant=0
+                count=0;relevant=0;in_india=0;fresh=0;samples=[]
                 async for job in stream:
                     count+=1
                     title=(job.get("title") or "").lower()
-                    if any(word in title for word in ("penetration","appsec","application security",
-                                                     "red team","offensive security")):
+                    if role_matches(job,DEFAULT_PROFILE):
                         relevant+=1
+                        if in_region(job.get("location","")):
+                            in_india+=1
+                            if posted_recent(job.get("posted_at"),30):fresh+=1
+                            if len(samples)<3:
+                                samples.append({"title":job.get("title"),
+                                                "location":job.get("location"),
+                                                "posted_at":job.get("posted_at")})
                 item={"feed":kind+":"+name,"status":"ok","total_jobs":count,
-                      "potentially_relevant":relevant}
+                      "potentially_relevant":relevant,"india_role_matches":in_india,
+                      "dated_last_30_days":fresh,"samples":samples}
             except Exception as exc:
                 item={"feed":kind+":"+name,"status":"error","reason":str(exc)[:250]}
             report.append(item)
             print(json.dumps(item,ensure_ascii=False),flush=True)
+        try:
+            response=await client.get("https://www.bing.com/search",params={
+                "q":'site:jobs.lever.co "application security" India',"format":"rss"})
+            response.raise_for_status()
+            root=ET.fromstring(response.text)
+            if root.tag.lower()!="rss":raise ValueError("Response is not RSS")
+            count=len(root.findall(".//item"))
+            report.append({"feed":"indexed:bing","status":"ok","indexed_items":count})
+        except Exception as exc:
+            report.append({"feed":"indexed:bing","status":"error","reason":str(exc)[:250]})
+        print(json.dumps(report[-1]),flush=True)
+        for name in ("BoschGroup","Visa","NielsenIQ"):
+            try:
+                response=await client.get("https://api.smartrecruiters.com/v1/companies/"+name+"/postings",
+                                          params={"limit":1})
+                response.raise_for_status()
+                total=response.json().get("totalFound",0)
+                report.append({"feed":"smartrecruiters:"+name+":global-count",
+                               "status":"ok","totalFound":total})
+            except Exception as exc:
+                report.append({"feed":"smartrecruiters:"+name+":global-count",
+                               "status":"error","reason":str(exc)[:250]})
+            print(json.dumps(report[-1]),flush=True)
     path=Path("source-smoke-report.json")
     path.write_text(json.dumps(report,indent=2),encoding="utf-8")
     available=sum(item["status"]=="ok" for item in report)
