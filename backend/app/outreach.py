@@ -12,12 +12,12 @@ def template(job,profile):
     skill_line=("I have worked with "+", ".join(skills[:4])+", which I believe may be relevant to the role."
                 if skills else "[Please insert a short, accurate summary of your relevant experience.]")
     return {"subject":"Interest in "+title+" — "+company,
-        "body":"Hello Hiring Team,\\n\\n"
+        "body":"Hello Hiring Team,\n\n"
         +"I came across the "+title+" opening at "+company+" and wanted to express my interest. "
-        +skill_line+"\\n\\n"
+        +skill_line+"\n\n"
         +"I would welcome the opportunity to discuss how my background fits your team's requirements. "
-        +"I can share my resume and further details if helpful.\\n\\n"
-        +"Regards,\\n[Your name]",
+        +"I can share my resume and further details if helpful.\n\n"
+        +"Regards,\n[Your name]",
         "ai_generated":False}
 
 async def draft(job,profile,resume):
@@ -28,7 +28,7 @@ async def draft(job,profile,resume):
         "No exaggeration, flattery, invented experience, fabricated employers or certifications. "
         "Do not claim familiarity with any tools unless confirmed in the resume or verified skills. "
         "Return only JSON with subject and body; include placeholders for unknown name/contact. "
-        "Keep the email around 100-140 words. Do not automatically send it.\\n"+
+        "Keep the email around 100-140 words. Do not automatically send it.\n"+
         json.dumps({"job":job,"profile":profile,"resume":resume[:10000]},ensure_ascii=False)[:18000])
     try:
         async with httpx.AsyncClient(timeout=45,auth=auth) as client:
