@@ -23,7 +23,7 @@ async def main():
                 elif kind=="ashby":stream=fetch_ashby(client,name)
                 elif kind=="smartrecruiters":stream=fetch_smartrecruiters(client,name)
                 else:continue
-                count=0;relevant=0;in_india=0;fresh=0;samples=[]
+                count=0;relevant=0;in_india=0;fresh=0;created_fresh=0;samples=[]
                 async for job in stream:
                     count+=1
                     title=(job.get("title") or "").lower()
@@ -31,6 +31,8 @@ async def main():
                         relevant+=1
                         if in_region(job.get("location","")):
                             in_india+=1
+                            if posted_recent(job.get("created_at"),30):
+                                created_fresh+=1
                             if len(samples)<3:
                                 enhanced=await hydrate_posting(client,dict(job))
                                 postdate=enhanced.get("posted_at") if enhanced else None
@@ -38,11 +40,13 @@ async def main():
                                 samples.append({"title":job.get("title"),
                                                 "location":job.get("location"),
                                                 "posted_at":postdate,
+                                                "created_at":job.get("created_at"),
                                                 "page_status":enhanced.get("active_check","unverified") if enhanced else "closed",
                                                 "url":job.get("url")})
                 item={"feed":kind+":"+name,"status":"ok","total_jobs":count,
                       "potentially_relevant":relevant,"india_role_matches":in_india,
-                      "dated_last_30_days":fresh,"samples":samples}
+                      "dated_last_30_days":fresh,"created_within_30_days":created_fresh,
+                      "samples":samples}
             except Exception as exc:
                 item={"feed":kind+":"+name,"status":"error","reason":str(exc)[:250]}
             report.append(item)
