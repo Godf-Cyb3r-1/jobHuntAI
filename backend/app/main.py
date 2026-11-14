@@ -184,8 +184,11 @@ def save(uid:str):
         res=db.execute("UPDATE jobs SET saved=1 WHERE id=?",(uid,))
         if not res.rowcount: raise HTTPException(404,"Not found")
     return {"saved":True}
-@app.post("/api/scan",dependencies=[Depends(authorized)])
-async def trigger_scan(): return await run_scan()
+@app.post("/api/scan",dependencies=[Depends(authorized)],status_code=202)
+async def trigger_scan():
+    if lock.locked():return {"status":"already_running"}
+    asyncio.create_task(run_scan())
+    return {"status":"queued","note":"Scan runs in the background; use /api/status to monitor"}
 @app.post("/api/pause",dependencies=[Depends(authorized)])
 def pause(): set_setting("paused",True); return {"paused":True}
 @app.post("/api/resume",dependencies=[Depends(authorized)])

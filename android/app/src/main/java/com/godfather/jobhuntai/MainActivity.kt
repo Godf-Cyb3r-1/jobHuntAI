@@ -88,6 +88,9 @@ class MainActivity:ComponentActivity() {
     var token by remember { mutableStateOf(prefs.getString("token","") ?: "") }
     var status by remember { mutableStateOf("Connect to your Windows server") }
     var jobs by remember { mutableStateOf(emptyList<JSONObject>()) }
+    var sourceStatus by remember { mutableStateOf("") }
+    var scanHistory by remember { mutableStateOf("") }
+    var showDiagnostics by remember { mutableStateOf(false) }
     var roles by remember { mutableStateOf(prefs.getString("roles","Penetration Tester, Application Security Engineer") ?: "") }
     var skills by remember { mutableStateOf(prefs.getString("skills","") ?: "") }
     var paused by remember { mutableStateOf(false) }
@@ -177,6 +180,42 @@ class MainActivity:ComponentActivity() {
                             }
                         },enabled=!busy) { Text(if(paused)"Resume" else "Pause") }
                     }
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick={
+                            execute("Source status") { api ->
+                                val info=JSONObject(api.request("/api/sources"))
+                                val health=info.optJSONArray("source_health") ?: JSONArray()
+                                val ok=(0 until health.length()).count {
+                                    health.getJSONObject(it).optString("status")=="ok"
+                                }
+                                val errors=(0 until health.length()).count {
+                                    health.getJSONObject(it).optString("status")=="error"
+                                }
+                                withContext(Dispatchers.Main) {
+                                    sourceStatus="Sources: $ok healthy, $errors failing · "+
+                                        info.optInt("catalog_size")+" catalog companies"
+                                    showDiagnostics=true
+                                }
+                            }
+                        },enabled=!busy){Text("Source health")}
+                        OutlinedButton(onClick={
+                            execute("Scan history") { api ->
+                                val history=JSONArray(api.request("/api/scan/history?limit=5"))
+                                val lines=(0 until history.length()).map {
+                                    val h=history.getJSONObject(it)
+                                    h.optString("status")+" · "+h.optInt("found")+" new · "+h.optString("started")
+                                }
+                                withContext(Dispatchers.Main) {
+                                    scanHistory=lines.joinToString("\n")
+                                    showDiagnostics=true
+                                }
+                            }
+                        },enabled=!busy){Text("History")}
+                    }
+                    if(showDiagnostics) {
+                        Text(sourceStatus,style=MaterialTheme.typography.bodySmall)
+                        if(scanHistory.isNotEmpty()) Text(scanHistory,style=MaterialTheme.typography.bodySmall)
+                    }
                     Text("30-day initial window · 15-minute scans · ≥85% push · strict role matching",
                         style=MaterialTheme.typography.bodySmall)
                 }
@@ -215,6 +254,26 @@ class MainActivity:ComponentActivity() {
                             Text("${job.optInt("score")}% match · "+
                                 (if(job.isNull("posted_at")) "Posting date unverified" else job.optString("posted_at")))
                             Text(job.optString("insight"),style=MaterialTheme.typography.bodySmall)
+                            Text(if(job.optInt("model_verified")==1) "AI evaluated"
+                                 else "Fallback estimate (AI not verified)",
+                                 style=MaterialTheme.typography.labelSmall)
+                            Row(horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                                TextButton(enabled=!busy,onClick={
+                                    execute("Marked relevant") { api ->
+                                        api.request("/api/jobs/"+job.optString("id")+"/feedback",
+                                            "POST",JSONObject().put("value","relevant").toString())
+                                    }
+                                }){Text("Relevant")}
+                                TextButton(enabled=!busy,onClick={
+                                    execute("Dismiss") { api ->
+                                        api.request("/api/jobs/"+job.optString("id")+"/feedback",
+                                            "POST",JSONObject().put("value","dismiss").toString())
+                                        withContext(Dispatchers.Main) {
+                                            jobs=jobs.filter { it.optString("id")!=job.optString("id") }
+                                        }
+                                    }
+                                }){Text("Dismiss")}
+                            }
                             TextButton(onClick={
                                 val url=job.optString("url")
                                 if(url.startsWith("https://")) ctx.startActivity(
