@@ -20,6 +20,12 @@ def models_from_provider(payload):
             free=(isinstance(cost,dict) and cost.get("input")==0 and cost.get("output")==0)
             if free or mid.endswith("-free"):
                 found.append({"providerID":pid,"modelID":mid})
+    # Prefer the requested free DeepSeek family where it is advertised.
+    # This is a preference, not a quality benchmark or guarantee of free quota.
+    found.sort(key=lambda model:(
+        0 if "deepseek" in model["modelID"].lower() else 1,
+        0 if "flash" in model["modelID"].lower() else 1,
+        model["providerID"],model["modelID"]))
     return found
 
 def parse_model_json(parts):
@@ -61,7 +67,7 @@ async def evaluate(job, profile, resume_text=""):
                      "job":{k:job.get(k) for k in ("title","company","location","description")}},ensure_ascii=False)[:22000])
     payload={"parts":[{"type":"text","text":prompt}]}
     try:
-        async with httpx.AsyncClient(timeout=50,auth=auth) as client:
+        async with httpx.AsyncClient(timeout=30,auth=auth) as client:
             explicit=os.getenv("JOBHUNT_OPENCODE_MODEL","").strip()
             candidates=[]
             if explicit and "/" in explicit:
@@ -82,7 +88,7 @@ async def evaluate(job, profile, resume_text=""):
             session=await client.post(endpoint+"/session",json={})
             session.raise_for_status()
             sid=session.json()["id"]
-            for model in unique[:5]:
+            for model in unique[:4]:
                 body=dict(payload)
                 if model:body["model"]=model
                 try:
