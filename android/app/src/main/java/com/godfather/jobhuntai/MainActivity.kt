@@ -105,6 +105,8 @@ class MainActivity:ComponentActivity() {
     var locations by remember { mutableStateOf(prefs.getString("locations","India, Remote") ?: "India, Remote") }
     var yearsExperience by remember { mutableStateOf(prefs.getString("years","") ?: "") }
     var resumeSuggestions by remember { mutableStateOf(emptyList<String>()) }
+    var roleSuggestions by remember { mutableStateOf(emptyList<String>()) }
+    var resumeAnalysis by remember { mutableStateOf("") }
     var fullDetails by remember { mutableStateOf<String?>(null) }
     var paused by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -268,6 +270,26 @@ class MainActivity:ComponentActivity() {
                     OutlinedTextField(locations,{locations=it},label={Text("Preferred locations (comma separated)")},modifier=Modifier.fillMaxWidth())
                     OutlinedTextField(yearsExperience,{yearsExperience=it},
                         label={Text("Years of experience (optional)")},modifier=Modifier.fillMaxWidth())
+                    OutlinedButton(enabled=!busy,onClick={
+                        execute("Analyze resume") { api ->
+                            val result=JSONObject(api.request("/api/resume/analyze"))
+                            val skillArray=result.optJSONArray("suggested_skills") ?: JSONArray()
+                            val rolesArray=result.optJSONArray("suggested_roles") ?: JSONArray()
+                            withContext(Dispatchers.Main) {
+                                resumeSuggestions=(0 until skillArray.length()).map {skillArray.getString(it)}
+                                roleSuggestions=(0 until rolesArray.length()).map {rolesArray.getString(it)}
+                                resumeAnalysis=result.optString("summary")
+                            }
+                        }
+                    }){Text("Analyze resume with OpenCode")}
+                    if(resumeAnalysis.isNotEmpty())Text(resumeAnalysis,style=MaterialTheme.typography.bodySmall)
+                    if(roleSuggestions.isNotEmpty()) {
+                        Text("Suggested roles: "+roleSuggestions.joinToString(", "),
+                             style=MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick={roles=roleSuggestions.joinToString(", ")}) {
+                            Text("Use suggested roles")
+                        }
+                    }
                     if(resumeSuggestions.isNotEmpty()) {
                         Text("Resume suggestions — confirm only skills you know: "+
                             resumeSuggestions.joinToString(", "),style=MaterialTheme.typography.bodySmall)
