@@ -80,6 +80,7 @@ def parse_job_posting(markup,url):
 async def indexed_jobs(client):
     """Public Bing RSS dorks; errors and missing results are normal, not guaranteed coverage."""
     seen=set()
+    good_responses=0
     # Rotate a bounded portion of the search matrix each quarter hour;
     # avoid hammering public search providers on every scan.
     from datetime import datetime, timezone
@@ -94,6 +95,8 @@ async def indexed_jobs(client):
                                  params={"q":"site:"+site+" "+term,"format":"rss"})
             res.raise_for_status()
             root=ET.fromstring(res.text)
+            if root.tag.lower()!="rss":continue
+            good_responses+=1
         except (httpx.HTTPError,ET.ParseError):continue
         for item in root.findall(".//item")[:8]:
             url=(item.findtext("link") or "").strip()
@@ -107,3 +110,5 @@ async def indexed_jobs(client):
                 job=parse_job_posting(response.text[:500000],str(response.url))
                 if job:yield job
             except (httpx.HTTPError,ValueError):continue
+    if good_responses==0:
+        raise RuntimeError("Bing RSS discovery unavailable for this scan")

@@ -178,7 +178,7 @@ async def collect_sources(process, diagnostics):
                     await process(job)
                 # This means the query completed, NOT that all searches were indexed.
                 source_report("indexed:bing","ok",count);diagnostics["ok"]+=1
-            except (httpx.HTTPError,ValueError,TypeError) as error:
+            except (httpx.HTTPError,ValueError,TypeError,RuntimeError) as error:
                 source_report("indexed:bing","error",count,str(error));diagnostics["error"]+=1
 
 async def scan(notify=None):
