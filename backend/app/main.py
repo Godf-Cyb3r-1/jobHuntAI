@@ -90,6 +90,7 @@ class Profile(BaseModel):
     skills:list[str]=Field(default_factory=list)
     exclude_roles:list[str]=Field(default_factory=list)
     strict:bool=True
+    years_experience:float|None=Field(default=None,ge=0,le=60)
     initial_days:int=Field(default=30,ge=1,le=30)
     alert_threshold:int=Field(default=85,ge=0,le=100)
 class Feed(BaseModel):
@@ -189,6 +190,12 @@ def retry_alerts():
         count=db.execute("""UPDATE notifications SET status='pending',attempts=0,last_error=NULL
                             WHERE status='failed'""").rowcount
     return {"requeued":count}
+@app.get("/api/jobs/{uid}",dependencies=[Depends(authorized)])
+def job_details(uid:str):
+    with connect() as db:
+        row=db.execute("SELECT * FROM jobs WHERE id=?",(uid,)).fetchone()
+    if not row:raise HTTPException(404,"Job not found")
+    return dict(row)
 @app.get("/api/jobs",dependencies=[Depends(authorized)])
 def jobs(min_score:int=0,limit:int=100,include_dismissed:bool=False,include_closed:bool=False):
     with connect() as db:

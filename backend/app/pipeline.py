@@ -104,6 +104,37 @@ def in_region(location):
         return not any(x in normalized for x in excluded)
     return False
 
+
+def location_allowed(location,profile):
+    preferences=[str(x).casefold() for x in profile.get("locations",["India","Remote"])]
+    if not location:return True   # Unknown must be marked, not misrepresented.
+    name=location.casefold()
+    if not in_region(location):return False
+    if not preferences:return True
+    if "india" in preferences and in_region(location):return True
+    if "remote" in preferences and "remote" in name:return True
+    synonyms={"tamil nadu":("chennai","coimbatore","erode","madurai","salem","trichy","tiruchirappalli"),
+              "karnataka":("bengaluru","bangalore","mysuru","mysore"),
+              "telangana":("hyderabad",),
+              "maharashtra":("pune","mumbai","nagpur"),
+              "odisha":("bhubaneswar","cuttack","berhampur","brahmapur")}
+    return any(pref in name or any(city in name for city in synonyms.get(pref,()))
+               for pref in preferences)
+
+def experience_eligible(job,profile):
+    years=profile.get("years_experience")
+    if years is None:return True
+    try:years=float(years)
+    except (ValueError,TypeError):return True
+    text=(job.get("description") or "").lower()
+    patterns=[r"(?:minimum|at least|min\.?)\s*(\d{1,2})\+?\s*(?:years|yrs)",
+              r"(\d{1,2})\s*\+\s*(?:years|yrs)\s+(?:of\s+)?experience",
+              r"(\d{1,2})\s*[-–]\s*\d{1,2}\s*(?:years|yrs)"]
+    req=[]
+    for pattern in patterns:
+        req.extend(int(m) for m in re.findall(pattern,text))
+    return not req or min(req)<=years+1.0
+
 def valid_until(value):
     if not value:return True
     try:
@@ -175,7 +206,7 @@ async def scan(notify=None):
         nonlocal added,updated,skipped
         url=job.get("url","")
         if not url.startswith("https://"):skipped+=1;return
-        if not role_matches(job,profile) or not in_region(job.get("location","")):
+        if not role_matches(job,profile) or not location_allowed(job.get("location",""),profile) or not experience_eligible(job,profile):
             skipped+=1;return
         if not valid_until(job.get("valid_through")):skipped+=1;return
         uid=job_id(url)
