@@ -13,6 +13,7 @@ from .pipeline import scan, migrate
 from .resume import suggest_skills,suggest_roles
 from .opencode import probe
 from .outreach import draft
+from .resume_ai import analyze
 from .catalog import COMPANIES,ATS,DISCOVERY_DOMAINS
 from .discovery import BUILTIN_FEEDS, SEARCH_SITES
 
@@ -144,6 +145,11 @@ def companies():
 @app.get("/api/ai/status",dependencies=[Depends(authorized)])
 async def ai_status():
     return await probe()
+@app.get("/api/resume/analyze",dependencies=[Depends(authorized)])
+async def analyze_resume():
+    text=setting("resume_text","")
+    if not text:raise HTTPException(404,"Upload a resume first")
+    return await analyze(text)
 @app.get("/api/resume/suggestions",dependencies=[Depends(authorized)])
 def resume_suggestions():
     text=setting("resume_text","")
