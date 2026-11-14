@@ -74,7 +74,7 @@ def posted_recent(iso, days):
         ts=datetime.fromisoformat(iso.replace("Z","+00:00"))
         if ts.tzinfo is None:
             # JobPosting datePosted often uses YYYY-MM-DD without a timezone.
-            if re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}",iso):
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}",iso):
                 ts=ts.replace(tzinfo=timezone.utc)
             else:return False
         return now()-timedelta(days=days) <= ts <= now()+timedelta(hours=2)
