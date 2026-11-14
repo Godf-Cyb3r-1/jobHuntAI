@@ -1,0 +1,188 @@
+"""Durable, observable scan lifecycle. Source errors never masquerade as zero vacancies."""
+import asyncio
+import json
+import os
+import re
+from datetime import datetime,timezone,timedelta
+from urllib.parse import urlparse
+import httpx
+from .core import (
+    now,connect,setting,set_setting,normalize_url,job_id,posted_recent,role_matches,
+    fetch_greenhouse,fetch_lever,DEFAULT_PROFILE
+)
+from .catalog import ATS
+from .discovery import fetch_ashby,indexed_jobs
+from .opencode import evaluate
+
+def migrate():
+    with connect() as db:
+        for col,kind in [("last_seen","TEXT"),("model_verified","INTEGER NOT NULL DEFAULT 0"),
+                          ("dismissed","INTEGER NOT NULL DEFAULT 0")]:
+            existing={r["name"] for r in db.execute("PRAGMA table_info(jobs)")}
+            if col not in existing:
+                db.execute(f"ALTER TABLE jobs ADD COLUMN {col} {kind}")
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS source_health(
+          name TEXT PRIMARY KEY, checked_at TEXT, status TEXT,
+          items INTEGER DEFAULT 0,error TEXT, failures INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS feedback(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,job_id TEXT NOT NULL,
+          value TEXT NOT NULL,reason TEXT, created TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS notifications(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,job_id TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT, sent_at TEXT, created_at TEXT NOT NULL);
+        """)
+
+def source_report(name,status,items=0,error=""):
+    with connect() as db:
+        old=db.execute("SELECT failures FROM source_health WHERE name=?",(name,)).fetchone()
+        failures=(old["failures"] if old else 0)+1 if status=="error" else 0
+        db.execute("""INSERT INTO source_health VALUES(?,?,?,?,?,?)
+            ON CONFLICT(name) DO UPDATE SET checked_at=excluded.checked_at,
+            status=excluded.status, items=excluded.items, error=excluded.error,
+            failures=excluded.failures""",(name,now().isoformat(),status,items,error[:500],failures))
+
+def in_region(location):
+    if not location:return True
+    normalized=location.casefold()
+    cities=("india","indian","bengaluru","bangalore","hyderabad","chennai","pune","mumbai",
+            "delhi","noida","gurugram","gurgaon","kolkata","bhubaneswar","kochi",
+            "coimbatore","tamil nadu","erode","trivandrum","thiruvananthapuram")
+    if any(x in normalized for x in cities):return True
+    # Remote jobs require more validation before being considered eligible in India.
+    if "remote" in normalized:
+        excluded=("united states","usa only","us only","north america only",
+                  "europe only","uk only","canada only")
+        return not any(x in normalized for x in excluded)
+    return False
+
+def valid_until(value):
+    if not value:return True
+    try:
+        dt=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        return dt>=now()
+    except (ValueError,TypeError):return True
+
+async def collect_sources(process, diagnostics):
+    feeds=setting("feeds",ATS)
+    async with httpx.AsyncClient(timeout=18,follow_redirects=False,
+         headers={"User-Agent":"JobHuntAI/0.2 (personal job search; contact repository owner)"}) as client:
+        for feed in feeds:
+            kind,name=feed.get("type"),feed.get("name","")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",name):continue
+            key=kind+":"+name
+            count=0
+            try:
+                if kind=="lever": stream=fetch_lever(client,name)
+                elif kind=="greenhouse":stream=fetch_greenhouse(client,name)
+                elif kind=="ashby":stream=fetch_ashby(client,name)
+                else:continue
+                async for job in stream:
+                    count+=1
+                    await process(job)
+                source_report(key,"ok",count); diagnostics["ok"]+=1
+            except (httpx.HTTPError,ValueError,TypeError,KeyError) as error:
+                source_report(key,"error",count,str(error))
+                diagnostics["error"]+=1
+        # Indexed discovery works on a bounded rotating subset each scan.
+        if setting("search_enabled",True):
+            count=0
+            try:
+                async for job in indexed_jobs(client):
+                    count+=1
+                    await process(job)
+                # This means the query completed, NOT that all searches were indexed.
+                source_report("indexed:bing","ok",count);diagnostics["ok"]+=1
+            except (httpx.HTTPError,ValueError,TypeError) as error:
+                source_report("indexed:bing","error",count,str(error));diagnostics["error"]+=1
+
+async def scan(notify=None):
+    if setting("paused",False):return {"status":"paused"}
+    profile=setting("profile",DEFAULT_PROFILE)
+    started=now()
+    migrate()
+    with connect() as db:
+        scan_id=db.execute("INSERT INTO scans(started,status) VALUES(?,?)",
+                           (started.isoformat(),"running")).lastrowid
+    first=not setting("initial_done",False)
+    # Recover downtime: do not lose jobs posted after last successful scan.
+    with connect() as db:
+        last=db.execute("SELECT ended FROM scans WHERE status IN ('complete','partial') AND id<>? ORDER BY id DESC LIMIT 1",
+                        (scan_id,)).fetchone()
+    days=min(30,int(profile.get("initial_days",30))) if first else 1
+    if not first and last and last["ended"]:
+        try:
+            elapsed=now()-datetime.fromisoformat(last["ended"])
+            days=min(30,max(1,int(elapsed.total_seconds()//86400)+1))
+        except (ValueError,TypeError):pass
+    added=0;updated=0;skipped=0;errors=[]
+    async def ingest(job):
+        nonlocal added,updated,skipped
+        url=job.get("url","")
+        if not url.startswith("https://"):skipped+=1;return
+        if not role_matches(job,profile) or not in_region(job.get("location","")):
+            skipped+=1;return
+        if not valid_until(job.get("valid_through")):skipped+=1;return
+        posted=job.get("posted_at")
+        if posted and not posted_recent(posted,days):skipped+=1;return
+        uid=job_id(url)
+        with connect() as db:
+            existing=db.execute("SELECT id FROM jobs WHERE id=?",(uid,)).fetchone()
+        if existing:
+            with connect() as db:
+                db.execute("UPDATE jobs SET last_seen=?,active=1 WHERE id=?",(now().isoformat(),uid))
+            updated+=1;return
+        result=await evaluate(job,profile,setting("resume_text",""))
+        verified=posted_recent(posted,days) if posted else False
+        with connect() as db:
+            cur=db.execute("""INSERT OR IGNORE INTO jobs
+              (id,source,title,company,location,description,url,posted_at,first_seen,
+               last_seen,verified_at,active,score,insight,missing,model_verified)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               (uid,job.get("source","unknown"),job.get("title",""),job.get("company",""),
+                job.get("location",""),(job.get("description") or "")[:25000],
+                normalize_url(url),posted,now().isoformat(),now().isoformat(),
+                now().isoformat() if verified else None,1,result["score"],
+                result["insight"],json.dumps(result["missing"]),int(result["model_verified"])))
+            created=cur.rowcount>0
+            if created and verified and result["model_verified"] and result["score"]>=int(profile.get("alert_threshold",85)):
+                db.execute("INSERT OR IGNORE INTO notifications(job_id,created_at) VALUES(?,?)",
+                           (uid,now().isoformat()))
+        if created:added+=1
+    status="complete"
+    diagnostics={"ok":0,"error":0}
+    try:
+        await collect_sources(ingest,diagnostics)
+        if diagnostics["ok"]==0:
+            status="error"
+            errors.append("All sources failed or are unavailable; initial scan remains pending")
+        elif diagnostics["error"]:
+            status="partial"
+        if diagnostics["ok"] and first:
+            set_setting("initial_done",True)
+        # Notification sending is a separate retryable queue. Failures never lose jobs.
+        if notify:
+            with connect() as db:
+                pending=db.execute("""SELECT id,job_id,attempts FROM notifications
+                     WHERE status='pending' AND attempts<5 ORDER BY id LIMIT 30""").fetchall()
+            for item in pending:
+                try:
+                    sent=await notify(item["job_id"])
+                    if sent is not True:
+                        raise RuntimeError("Push not configured or no registered devices")
+                    with connect() as db:
+                        db.execute("UPDATE notifications SET status='sent',sent_at=?,attempts=attempts+1 WHERE id=?",
+                                   (now().isoformat(),item["id"]))
+                except Exception as exc:
+                    with connect() as db:
+                        db.execute("UPDATE notifications SET attempts=attempts+1,last_error=? WHERE id=?",
+                                   (str(exc)[:300],item["id"]))
+    except Exception as exc:
+        status="error";errors.append(str(exc)[:500])
+    with connect() as db:
+        db.execute("UPDATE scans SET ended=?,status=?,found=?,error=? WHERE id=?",
+                   (now().isoformat(),status,added,"; ".join(errors),scan_id))
+    return {"status":status,"new_jobs":added,"seen_again":updated,
+            "filtered":skipped,"source_health":diagnostics,"errors":errors,"lookback_days":days}
