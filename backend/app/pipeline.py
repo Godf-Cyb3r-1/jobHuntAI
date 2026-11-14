@@ -19,7 +19,8 @@ def migrate():
     with connect() as db:
         for col,kind in [("last_seen","TEXT"),("model_verified","INTEGER NOT NULL DEFAULT 0"),
                           ("dismissed","INTEGER NOT NULL DEFAULT 0"), ("active_check","TEXT NOT NULL DEFAULT 'unverified'"),
-                          ("source_ref","TEXT"),("closed_at","TEXT"),("salary","TEXT")]:
+                          ("source_ref","TEXT"),("closed_at","TEXT"),("salary","TEXT"),
+                          ("created_at","TEXT"),("date_basis","TEXT NOT NULL DEFAULT 'unknown'")]:
             existing={r["name"] for r in db.execute("PRAGMA table_info(jobs)")}
             if col not in existing:
                 db.execute(f"ALTER TABLE jobs ADD COLUMN {col} {kind}")
@@ -223,24 +224,32 @@ async def scan(notify=None):
         if job is None:skipped+=1;return
         if not valid_until(job.get("valid_through")):skipped+=1;return
         posted=job.get("posted_at")
+        created_at=job.get("created_at")
         if posted and not posted_recent(posted,days):skipped+=1;return
         result=await evaluate(job,profile,setting("resume_text",""))
         adjustment=feedback_adjustment(job)
         if adjustment:
             result["score"]=max(0,min(100,result["score"]+adjustment))
             result["insight"]+=f" (Past feedback adjustment: {adjustment:+d} points.)"
-        verified=posted_recent(posted,days) if posted else False
+        published_fresh=posted_recent(posted,days) if posted else False
+        # A published listing cannot predate its record creation. A newly
+        # created record establishes a lower bound, not its publication date.
+        created_fresh=posted_recent(created_at,days) if created_at else False
+        verified=published_fresh or created_fresh
+        date_basis=("publication_date" if published_fresh else
+                    "creation_lower_bound" if created_fresh else "unknown")
         with connect() as db:
             cur=db.execute("""INSERT OR IGNORE INTO jobs
               (id,source,title,company,location,description,url,posted_at,first_seen,
-               last_seen,verified_at,active,score,insight,missing,model_verified,active_check,source_ref,salary)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               last_seen,verified_at,active,score,insight,missing,model_verified,active_check,source_ref,salary,created_at,date_basis)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                (uid,job.get("source","unknown"),job.get("title",""),job.get("company",""),
                 job.get("location",""),(job.get("description") or "")[:25000],
                 normalize_url(url),posted,now().isoformat(),now().isoformat(),
                 now().isoformat() if verified else None,1,result["score"],
                 result["insight"],json.dumps(result["missing"]),int(result["model_verified"]),
-                job.get("active_check","source_listing_only"),job.get("source_ref"),job.get("salary")))
+                job.get("active_check","source_listing_only"),job.get("source_ref"),job.get("salary"),
+                created_at,date_basis))
             created=cur.rowcount>0
             if created and verified and result["model_verified"] and result["score"]>=int(profile.get("alert_threshold",85)):
                 db.execute("INSERT OR IGNORE INTO notifications(job_id,created_at) VALUES(?,?)",

@@ -11,3 +11,19 @@ def test_freshness():
     assert posted_recent(now().isoformat(),30)
     assert not posted_recent((now()-timedelta(days=31)).isoformat(),30)
     assert not posted_recent(None,30)
+
+import asyncio
+import httpx
+from app.core import fetch_lever
+def test_lever_created_at_is_not_published_at():
+    def handle(request):
+        return httpx.Response(200,json=[{"text":"Penetration Tester",
+            "hostedUrl":"https://jobs.lever.co/example/123",
+            "createdAt":1794652800000,
+            "categories":{"location":"Chennai, India"}}])
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            return [item async for item in fetch_lever(client,"example")]
+    job=asyncio.run(run())[0]
+    assert job["posted_at"] is None
+    assert job["created_at"] is not None

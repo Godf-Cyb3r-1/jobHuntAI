@@ -81,17 +81,28 @@ async def fetch_greenhouse(client, board):
     url=f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
     response=await client.get(url); response.raise_for_status()
     for j in response.json().get("jobs",[]):
-        # Greenhouse updated_at is NOT a reliable created_at: do not assert posting freshness.
+        # first_published is publication evidence; updated_at is not.
         yield {"source":"greenhouse","title":j.get("title",""),"company":board,
                "location":(j.get("location") or {}).get("name",""),
                "description":re.sub("<[^>]+>"," ",j.get("content") or ""),
-               "url":j.get("absolute_url",""),"posted_at":None}
+               "url":j.get("absolute_url",""),"posted_at":j.get("first_published"),
+               "valid_through":j.get("application_deadline")}
 async def fetch_lever(client, site):
     response=await client.get(f"https://api.lever.co/v0/postings/{site}?mode=json")
     response.raise_for_status()
     for j in response.json():
         categories=j.get("categories") or {}
+        created=j.get("createdAt")
+        try:
+            created_at=datetime.fromtimestamp(float(created)/1000,timezone.utc).isoformat() if created else None
+        except (TypeError,ValueError,OverflowError):created_at=None
+        salary_range=j.get("salaryRange") or {}
+        if isinstance(salary_range,dict) and salary_range.get("min") is not None:
+            salary=f'{salary_range.get("currency","")} {salary_range.get("min")}–{salary_range.get("max","")} {salary_range.get("interval","")}'
+        else:
+            salary=j.get("salaryDescription")
         yield {"source":"lever","title":j.get("text",""),"company":site,
                "location":categories.get("location",""),
                "description":(j.get("descriptionPlain") or "")+" "+(j.get("additionalPlain") or ""),
-               "url":j.get("hostedUrl",""),"posted_at":None}
+               "url":j.get("hostedUrl",""),"posted_at":None,
+               "created_at":created_at,"salary":salary}
