@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
+from .catalog import DISCOVERY_DOMAINS, SEARCH_TERMS as EXPANDED_TERMS
 
 BUILTIN_FEEDS=[
  {"type":"lever","name":"acceldata"},{"type":"lever","name":"safe"},
@@ -34,7 +35,7 @@ SEARCH_TERMS=['"penetration tester" India','"application security" India',
 def allowed_url(url):
     try:
         parsed=urlparse(url)
-        return (parsed.scheme=="https" and parsed.hostname in SEARCH_SITES
+        return (parsed.scheme=="https" and parsed.hostname in DISCOVERY_DOMAINS
                 and not parsed.username and not parsed.password)
     except ValueError:
         return False
@@ -82,7 +83,7 @@ async def indexed_jobs(client):
     # Rotate a bounded portion of the search matrix each quarter hour;
     # avoid hammering public search providers on every scan.
     from datetime import datetime, timezone
-    queries=[(term,site) for site in SEARCH_SITES for term in SEARCH_TERMS]
+    queries=[(term,site) for site in DISCOVERY_DOMAINS for term in EXPANDED_TERMS]
     batch_size=16
     slot=int(datetime.now(timezone.utc).timestamp()//900)
     start=(slot*batch_size)%len(queries)

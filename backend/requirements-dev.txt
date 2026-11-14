@@ -2,3 +2,4 @@
 pytest>=8,<10
 python-multipart>=0.0.9,<1
 google-auth>=2,<3
+respx>=0.21,<1

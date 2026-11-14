@@ -8,7 +8,10 @@ from pathlib import Path
 from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from .core import connect, init_db, setting, set_setting, scan, DEFAULT_PROFILE
+from .core import connect, init_db, setting, set_setting, DEFAULT_PROFILE
+from .pipeline import scan, migrate
+from .resume import suggest_skills
+from .catalog import COMPANIES,ATS,DISCOVERY_DOMAINS
 from .discovery import BUILTIN_FEEDS, SEARCH_SITES
 
 def api_secret():
@@ -36,7 +39,7 @@ async def authorized(authorization: str|None=Header(default=None)):
 async def push(uid):
     project=os.getenv("JOBHUNT_FCM_PROJECT")
     credentials=os.getenv("JOBHUNT_FCM_TOKEN_FILE")
-    if not project or not credentials: return
+    if not project or not credentials: return False
     try:
         from google.oauth2 import service_account
         from google.auth.transport.requests import Request
@@ -56,21 +59,26 @@ async def push(uid):
                                          "body":str(job["score"])+"% match · "+(job["insight"] or "")[:100]},
                          "data":{"job_id":uid,"url":job["url"]}}})
                 res.raise_for_status()
-        if devices:
-            with connect() as db: db.execute("UPDATE jobs SET notified=1 WHERE id=?",(uid,))
+        if not devices:return False
+        with connect() as db: db.execute("UPDATE jobs SET notified=1 WHERE id=?",(uid,))
+        return True
     except Exception as exc:
         print("Push delivery failed:",str(exc)[:200])
+        raise
 async def run_scan():
     if lock.locked(): return {"status":"already_running"}
     async with lock: return await scan(push)
 @asynccontextmanager
 async def lifespan(app):
     init_db()
+    migrate()
     print("JobHuntAI device pairing key (private):",api_secret())
     scheduler.add_job(run_scan,"interval",
        minutes=max(1,int(os.getenv("JOBHUNT_SCAN_MINUTES","15"))),
        id="job_scan",max_instances=1,coalesce=True)
     scheduler.start()
+    # Kick off the first scan promptly instead of idling for 15 minutes.
+    asyncio.create_task(run_scan())
     yield
     scheduler.shutdown(wait=False)
 app=FastAPI(title="JobHuntAI",version="0.1.0",lifespan=lifespan)
@@ -96,7 +104,8 @@ def status():
         total=db.execute("SELECT count(*) n FROM jobs").fetchone()["n"]
         latest=db.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
     return {"paused":setting("paused",False),"initial_done":setting("initial_done",False),
-            "jobs":total,"scan":dict(latest) if latest else None}
+            "jobs":total,"scan":dict(latest) if latest else None,
+            "opencode_url":os.getenv("JOBHUNT_OPENCODE_URL","http://127.0.0.1:4096")}
 @app.get("/api/profile",dependencies=[Depends(authorized)])
 def get_profile(): return setting("profile",DEFAULT_PROFILE)
 @app.put("/api/profile",dependencies=[Depends(authorized)])
@@ -105,7 +114,7 @@ def put_profile(data:Profile):
     set_setting("profile",profile)
     return profile
 @app.get("/api/feeds",dependencies=[Depends(authorized)])
-def get_feeds(): return setting("feeds",BUILTIN_FEEDS)
+def get_feeds(): return setting("feeds",ATS)
 @app.put("/api/feeds",dependencies=[Depends(authorized)])
 def put_feeds(feeds:list[Feed]):
     if len(feeds)>500: raise HTTPException(400,"Too many feeds")
@@ -116,18 +125,58 @@ def put_feeds(feeds:list[Feed]):
     set_setting("feeds",[f.model_dump() for f in feeds]); return {"count":len(feeds)}
 @app.get("/api/sources",dependencies=[Depends(authorized)])
 def source_status():
-    return {"feeds":setting("feeds",BUILTIN_FEEDS),"search_domains":SEARCH_SITES,
+    with connect() as db:
+        health=[dict(x) for x in db.execute("SELECT * FROM source_health ORDER BY checked_at DESC")]
+    return {"feeds":setting("feeds",ATS),"search_domains":DISCOVERY_DOMAINS,
+            "catalog_size":len(COMPANIES),"source_health":health,
             "search_enabled":setting("search_enabled",True)}
 @app.post("/api/feeds/reset",dependencies=[Depends(authorized)])
 def reset_feeds():
-    set_setting("feeds",BUILTIN_FEEDS)
-    return {"count":len(BUILTIN_FEEDS)}
+    set_setting("feeds",ATS)
+    return {"count":len(ATS)}
+@app.get("/api/companies",dependencies=[Depends(authorized)])
+def companies():
+    return [{"name":c.name,"tier":c.tier,"domain":c.domain}
+            for c in COMPANIES]
+@app.get("/api/resume/suggestions",dependencies=[Depends(authorized)])
+def resume_suggestions():
+    text=setting("resume_text","")
+    confirmed=setting("profile",DEFAULT_PROFILE).get("skills",[])
+    return {"suggested":suggest_skills(text),"confirmed":confirmed,
+            "note":"Suggestions are not asserted as experience until manually confirmed"}
+class Feedback(BaseModel):
+    value:str
+    reason:str=""
+@app.post("/api/jobs/{uid}/feedback",dependencies=[Depends(authorized)])
+def feedback(uid:str,data:Feedback):
+    if data.value not in ("relevant","irrelevant","dismiss","applied","interviewing"):
+        raise HTTPException(422,"Invalid feedback")
+    from .core import now
+    with connect() as db:
+        if not db.execute("SELECT 1 FROM jobs WHERE id=?",(uid,)).fetchone():
+            raise HTTPException(404,"Job not found")
+        db.execute("INSERT INTO feedback(job_id,value,reason,created) VALUES(?,?,?,?)",
+                   (uid,data.value,data.reason[:500],now().isoformat()))
+        if data.value in ("dismiss","irrelevant"):
+            db.execute("UPDATE jobs SET dismissed=1 WHERE id=?",(uid,))
+        elif data.value=="relevant":
+            db.execute("UPDATE jobs SET dismissed=0 WHERE id=?",(uid,))
+    return {"status":"saved"}
+@app.get("/api/scan/history",dependencies=[Depends(authorized)])
+def scan_history(limit:int=25):
+    with connect() as db:
+        return [dict(x) for x in db.execute("SELECT * FROM scans ORDER BY id DESC LIMIT ?",
+                                          (max(1,min(limit,100)),))]
+@app.get("/api/alerts",dependencies=[Depends(authorized)])
+def alerts():
+    with connect() as db:
+        return [dict(x) for x in db.execute("SELECT * FROM notifications ORDER BY id DESC LIMIT 50")]
 @app.get("/api/jobs",dependencies=[Depends(authorized)])
-def jobs(min_score:int=0,limit:int=100):
+def jobs(min_score:int=0,limit:int=100,include_dismissed:bool=False):
     with connect() as db:
         items=db.execute("SELECT id,source,title,company,location,url,posted_at,first_seen,"
-          "verified_at,active,score,insight,missing,saved FROM jobs WHERE score>=? "
-          "ORDER BY first_seen DESC LIMIT ?",(min_score,min(max(limit,1),500))).fetchall()
+          "verified_at,active,score,insight,missing,saved,model_verified,dismissed FROM jobs WHERE score>=? AND (dismissed=0 OR ?=1) "
+          "ORDER BY first_seen DESC LIMIT ?",(min_score,int(include_dismissed),min(max(limit,1),500))).fetchall()
     return [dict(row) for row in items]
 @app.post("/api/jobs/{uid}/save",dependencies=[Depends(authorized)])
 def save(uid:str):
@@ -166,4 +215,6 @@ async def upload_resume(file:UploadFile=File(...)):
     if not text.strip(): raise HTTPException(422,"No extractable text")
     # Resume text stored locally; explicit profile skills remain user verified.
     set_setting("resume_text",text[:30000])
-    return {"parsed_characters":min(len(text),30000),"note":"Verify skills in profile before matching"}
+    return {"parsed_characters":min(len(text),30000),
+            "suggested_skills":suggest_skills(text),
+            "note":"Confirm actual skills in profile before matching"}
