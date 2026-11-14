@@ -56,16 +56,31 @@ def normalize_url(url):
     return urlunparse((p.scheme.lower(),p.netloc.lower(),p.path.rstrip("/"),"",urlencode(safe),""))
 def job_id(url):
     return hashlib.sha256(normalize_url(url).encode()).hexdigest()[:24]
+ROLE_ALIASES = {
+    "penetration tester": ("penetration test","pentest","pen test","vapt","ethical hacker"),
+    "application security engineer": ("application security","appsec","web application security"),
+    "appsec engineer": ("application security","appsec","web application security"),
+    "offensive security engineer": ("offensive security","red team","adversary emulation"),
+    "red team engineer": ("red team","red teaming","adversary emulation"),
+    "product security engineer": ("product security",),
+    "security researcher": ("security researcher","vulnerability researcher",
+                            "vulnerability research"),
+    "web application security tester": ("web application security","web penetration test","web pentest"),
+}
 def role_matches(job, profile):
-    title=job.get("title","").lower()
-    desc=(job.get("description") or "").lower()
-    if any(term in title for term in EXCLUDED+tuple(s.lower() for s in profile.get("exclude_roles",[]))):
-        return False
-    if not profile.get("strict",True):
-        return True
-    # A relevant security job must be described by a relevant title, not keyword-stuffed body.
-    return any(term in title for term in ROLE_TERMS) or any(
-        re.search(r"\b"+re.escape(role.lower())+r"\b",title) for role in profile.get("roles",[]))
+    """Strict: only user-selected role families and their title synonyms qualify."""
+    title=(job.get("title") or "").casefold()
+    exclusions=EXCLUDED+tuple(s.casefold() for s in profile.get("exclude_roles",[])
+                              if isinstance(s,str))
+    if any(term in title for term in exclusions):return False
+    if not profile.get("strict",True):return True
+    roles=profile.get("roles") or DEFAULT_PROFILE["roles"]
+    for role in roles:
+        if not isinstance(role,str):continue
+        synonyms=ROLE_ALIASES.get(role.casefold(),(role.casefold(),))
+        if any(alias in title for alias in synonyms):return True
+    return False
+
 def posted_recent(iso, days):
     if not iso: return False
     try:

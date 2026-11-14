@@ -27,3 +27,12 @@ def test_lever_created_at_is_not_published_at():
     job=asyncio.run(run())[0]
     assert job["posted_at"] is None
     assert job["created_at"] is not None
+
+def test_only_selected_role_family_matches():
+    profile={"roles":["Penetration Tester"],"strict":True}
+    assert role_matches({"title":"Senior Pentest Consultant"},profile)
+    assert not role_matches({"title":"Product Security Engineer"},profile)
+    assert not role_matches({"title":"Security Researcher"},profile)
+    profile["roles"]=["Application Security Engineer"]
+    assert role_matches({"title":"AppSec Engineer"},profile)
+    assert not role_matches({"title":"Red Team Operator"},profile)
