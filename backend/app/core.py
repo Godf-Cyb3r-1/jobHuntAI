@@ -72,7 +72,11 @@ def posted_recent(iso, days):
     if not iso: return False
     try:
         ts=datetime.fromisoformat(iso.replace("Z","+00:00"))
-        if ts.tzinfo is None: return False
+        if ts.tzinfo is None:
+            # JobPosting datePosted often uses YYYY-MM-DD without a timezone.
+            if re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}",iso):
+                ts=ts.replace(tzinfo=timezone.utc)
+            else:return False
         return now()-timedelta(days=days) <= ts <= now()+timedelta(hours=2)
     except (ValueError,TypeError): return False
 async def fetch_greenhouse(client, board):
@@ -122,7 +126,7 @@ def heuristic(job,profile):
             "missing":missing[:10]}
 async def evaluate(job,profile):
     fallback=heuristic(job,profile)
-    url=os.getenv("JOBHUNT_OPENCODE_URL","").rstrip("/")
+    url=os.getenv("JOBHUNT_OPENCODE_URL","http://127.0.0.1:4096").rstrip("/")
     if not url: return fallback
     instructions=("Assess this job against ONLY the verified skills provided. Strict cybersecurity "
       "role-family matching. Never invent experience. Return ONLY JSON: "
