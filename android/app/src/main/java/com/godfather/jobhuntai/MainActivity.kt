@@ -104,6 +104,7 @@ class MainActivity:ComponentActivity() {
     var skills by remember { mutableStateOf(prefs.getString("skills","") ?: "") }
     var locations by remember { mutableStateOf(prefs.getString("locations","India, Remote") ?: "India, Remote") }
     var yearsExperience by remember { mutableStateOf(prefs.getString("years","") ?: "") }
+    var preferredCompanies by remember { mutableStateOf(prefs.getString("companies","") ?: "") }
     var resumeSuggestions by remember { mutableStateOf(emptyList<String>()) }
     var roleSuggestions by remember { mutableStateOf(emptyList<String>()) }
     var resumeAnalysis by remember { mutableStateOf("") }
@@ -245,6 +246,11 @@ class MainActivity:ComponentActivity() {
                         },enabled=!busy){Text("History")}
                     }
                     OutlinedButton(enabled=!busy,onClick={
+                        execute("Test phone push") { api ->
+                            api.request("/api/notifications/test","POST")
+                        }
+                    }){Text("Send test notification")}
+                    OutlinedButton(enabled=!busy,onClick={
                         execute("AI status") { api ->
                             val ai=JSONObject(api.request("/api/ai/status"))
                             val models=ai.optJSONArray("free_models")?.length() ?: 0
@@ -270,6 +276,8 @@ class MainActivity:ComponentActivity() {
                     OutlinedTextField(locations,{locations=it},label={Text("Preferred locations (comma separated)")},modifier=Modifier.fillMaxWidth())
                     OutlinedTextField(yearsExperience,{yearsExperience=it},
                         label={Text("Years of experience (optional)")},modifier=Modifier.fillMaxWidth())
+                    OutlinedTextField(preferredCompanies,{preferredCompanies=it},
+                        label={Text("Priority companies (comma separated)")},modifier=Modifier.fillMaxWidth())
                     OutlinedButton(enabled=!busy,onClick={
                         execute("Analyze resume") { api ->
                             val result=JSONObject(api.request("/api/resume/analyze"))
@@ -307,13 +315,17 @@ class MainActivity:ComponentActivity() {
                                 profile.put("roles",JSONArray(roleValues)); profile.put("skills",JSONArray(skillValues))
                                 val places=locations.split(",").map{it.trim()}.filter{it.isNotEmpty()}
                                 profile.put("locations",JSONArray(places))
+                                val preferred=preferredCompanies.split(",").map{it.trim()}
+                                    .filter{it.isNotEmpty()}
+                                profile.put("preferred_companies",JSONArray(preferred))
                                 if(yearsExperience.toDoubleOrNull()!=null)
                                     profile.put("years_experience",yearsExperience.toDouble())
                                 else profile.put("years_experience",JSONObject.NULL)
                                 profile.put("strict",true);profile.put("initial_days",30);profile.put("alert_threshold",85)
                                 api.request("/api/profile","PUT",profile.toString())
                                 prefs.edit().putString("roles",roles).putString("skills",skills)
-                                    .putString("locations",locations).putString("years",yearsExperience).apply()
+                                    .putString("locations",locations).putString("years",yearsExperience)
+                                    .putString("companies",preferredCompanies).apply()
                             }
                         },enabled=!busy){Text("Save preferences")}
                         OutlinedButton(onClick={filePicker.launch(arrayOf("application/pdf",
