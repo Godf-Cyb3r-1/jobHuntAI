@@ -9,13 +9,28 @@ from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .core import connect, init_db, setting, set_setting, scan, DEFAULT_PROFILE
+from .discovery import BUILTIN_FEEDS, SEARCH_SITES
+
+def api_secret():
+    supplied=os.getenv("JOBHUNT_API_KEY","")
+    if len(supplied)>=24 and supplied!="replace-with-long-random-value":
+        return supplied
+    path=Path(os.getenv("JOBHUNT_KEY_FILE",".jobhunt-api-key"))
+    if path.exists():
+        key=path.read_text(encoding="utf-8").strip()
+        if len(key)>=24: return key
+    key=secrets.token_urlsafe(32)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open("x",encoding="utf-8") as handle:
+        handle.write(key+"\\n")
+    try: path.chmod(0o600)
+    except OSError: pass
+    return key
 
 scheduler=AsyncIOScheduler(timezone="UTC")
 lock=asyncio.Lock()
 async def authorized(authorization: str|None=Header(default=None)):
-    secret=os.getenv("JOBHUNT_API_KEY","")
-    if len(secret)<24:
-        raise HTTPException(503,"Configure JOBHUNT_API_KEY with at least 24 characters")
+    secret=api_secret()
     if not authorization or not secrets.compare_digest(authorization,"Bearer "+secret):
         raise HTTPException(401,"Invalid API token")
 async def push(uid):
@@ -51,6 +66,7 @@ async def run_scan():
 @asynccontextmanager
 async def lifespan(app):
     init_db()
+    print("JobHuntAI device pairing key (private):",api_secret())
     scheduler.add_job(run_scan,"interval",
        minutes=max(1,int(os.getenv("JOBHUNT_SCAN_MINUTES","15"))),
        id="job_scan",max_instances=1,coalesce=True)
@@ -73,7 +89,7 @@ class Device(BaseModel):
     token:str=Field(min_length=20,max_length=4096)
 @app.get("/health")
 def health():
-    return {"status":"ok","configured":len(os.getenv("JOBHUNT_API_KEY",""))>=24}
+    return {"status":"ok","configured":True}
 @app.get("/api/status",dependencies=[Depends(authorized)])
 def status():
     with connect() as db:
@@ -89,15 +105,23 @@ def put_profile(data:Profile):
     set_setting("profile",profile)
     return profile
 @app.get("/api/feeds",dependencies=[Depends(authorized)])
-def get_feeds(): return setting("feeds",[])
+def get_feeds(): return setting("feeds",BUILTIN_FEEDS)
 @app.put("/api/feeds",dependencies=[Depends(authorized)])
 def put_feeds(feeds:list[Feed]):
     if len(feeds)>500: raise HTTPException(400,"Too many feeds")
     import re
     for feed in feeds:
-        if feed.type not in ("lever","greenhouse") or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",feed.name):
+        if feed.type not in ("lever","greenhouse","ashby") or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",feed.name):
             raise HTTPException(422,"Invalid ATS feed")
     set_setting("feeds",[f.model_dump() for f in feeds]); return {"count":len(feeds)}
+@app.get("/api/sources",dependencies=[Depends(authorized)])
+def source_status():
+    return {"feeds":setting("feeds",BUILTIN_FEEDS),"search_domains":SEARCH_SITES,
+            "search_enabled":setting("search_enabled",True)}
+@app.post("/api/feeds/reset",dependencies=[Depends(authorized)])
+def reset_feeds():
+    set_setting("feeds",BUILTIN_FEEDS)
+    return {"count":len(BUILTIN_FEEDS)}
 @app.get("/api/jobs",dependencies=[Depends(authorized)])
 def jobs(min_score:int=0,limit:int=100):
     with connect() as db:

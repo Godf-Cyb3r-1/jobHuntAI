@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 import httpx
+from .discovery import BUILTIN_FEEDS, fetch_ashby, indexed_jobs
 
 DB = os.getenv("JOBHUNT_DB", "jobhunt.db")
 INITIAL_DAYS = int(os.getenv("JOBHUNT_INITIAL_DAYS", "30"))
@@ -93,7 +94,7 @@ async def fetch_lever(client, site):
                "description":(j.get("descriptionPlain") or "")+" "+(j.get("additionalPlain") or ""),
                "url":j.get("hostedUrl",""),"posted_at":None}
 async def sources():
-    feeds=setting("feeds", [])
+    feeds=setting("feeds", BUILTIN_FEEDS)
     async with httpx.AsyncClient(timeout=20,follow_redirects=True,
              headers={"User-Agent":"JobHuntAI/0.1 (personal job discovery)"}) as client:
         for feed in feeds:
@@ -104,8 +105,12 @@ async def sources():
                     async for job in fetch_greenhouse(client,name): yield job
                 elif kind=="lever":
                     async for job in fetch_lever(client,name): yield job
+                elif kind=="ashby":
+                    async for job in fetch_ashby(client,name): yield job
             except (httpx.HTTPError,ValueError,KeyError):
                 continue
+        if setting("search_enabled",True):
+            async for job in indexed_jobs(client): yield job
 def heuristic(job,profile):
     text=(job.get("title","")+" "+job.get("description","")).lower()
     skills=[s for s in profile.get("skills",[]) if isinstance(s,str) and len(s)<80]
@@ -124,7 +129,8 @@ async def evaluate(job,profile):
       '{"score":0,"insight":"short evidence-based reason","missing":["requirements"]}. '
       "Score 0-100; be conservative and mark insufficient evidence low.")
     payload={"parts":[{"type":"text","text":instructions+"\n"+json.dumps({
-        "profile":profile,"job":{k:job.get(k) for k in ("title","company","description","location")}},
+        "profile":profile,"resume":setting("resume_text","")[:12000],
+        "job":{k:job.get(k) for k in ("title","company","description","location")}},
         ensure_ascii=False)[:15000]}]}
     try:
         auth=None
@@ -158,6 +164,14 @@ async def scan(notify=None):
         async for job in sources():
             if not job.get("url","").startswith("https://"): continue
             if not role_matches(job,profile): continue
+            loc=(job.get("location") or "").lower()
+            india=("india","indian","remote","bengaluru","bangalore","hyderabad","chennai","pune","mumbai","delhi","noida","gurugram","gurgaon","kolkata","bhubaneswar","kochi","coimbatore","tamil nadu")
+            if loc and not any(place in loc for place in india): continue
+            if job.get("valid_through"):
+                try:
+                    expires=datetime.fromisoformat(str(job["valid_through"]).replace("Z","+00:00"))
+                    if expires.tzinfo and expires<now():continue
+                except (ValueError,TypeError):pass
             days=int(profile.get("initial_days",INITIAL_DAYS)) if not setting("initial_done",False) else 1
             # Keep undated jobs unverified, not push-alert eligible; first-seen captures new discovery.
             if job.get("posted_at") and not posted_recent(job["posted_at"],days): continue
