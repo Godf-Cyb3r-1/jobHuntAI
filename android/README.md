@@ -20,7 +20,7 @@ The app **refuses cleartext HTTP**. Install Tailscale on Windows and Android and
    JOBHUNT_FCM_TOKEN_FILE=C:\jobHuntSecrets\fcm-service.json
    ```
 5. Restart the Windows backend, open the APK and tap **Connect / Refresh** once to register its FCM device token. Grant notification permission.
-6. To test, first check `GET /api/alerts` for queued alerts and `GET /api/sources` for live discoveries. A push is attempted for *new*, date-verified, relevant jobs scoring at least 85% with actual OpenCode inference. Without a qualified new job, there may be no push to test. The server does not invent a qualifying job.
+6. To test, first check `GET /api/alerts` for queued alerts and `GET /api/sources` for live discoveries. A push is attempted for *new*, freshness-verified, geographically eligible jobs scoring at least 85% with actual OpenCode inference. Tap **Send test notification** inside the app, or call authenticated `POST /api/notifications/test`, to test real Firebase delivery without inserting a fake job. Without Firebase configuration the endpoint returns an explicit 409 response.
 
 The app initializes Firebase programmatically from the four BuildConfig settings. **You do not need to commit `google-services.json` to GitHub**. Do not place service-account JSON in the Android app, Actions secrets used by the client, or any public repository path.
 

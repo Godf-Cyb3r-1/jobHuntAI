@@ -7,8 +7,8 @@ Native Android client + Windows Python engine. **The tool finds and evaluates jo
 - Windows FastAPI + SQLite server, auto-generated long random phone pairing key, 15-minute scheduled scans and manual scan/pause/resume
 - Automatic OpenCode CLI startup (when installed) and available free-model selection with preference for free DeepSeek; no paid DeepSeek API key
 - PDF/DOCX resume extraction, explicitly confirmed skills, AI analysis suggestions, strict AppSec/Pentest roles
-- 14 built-in ATS board identifiers (Lever, Ashby and SmartRecruiters; custom Greenhouse boards supported), 60+ categorized Indian/India-relevant employers, plus 30+ job board and career portal search targets
-- Public Bing RSS indexed search over a rotating batch of job-family/site queries, with HTML JobPosting parsing and freshness/expiry checks
+- 22 built-in ATS board identifiers (Lever, Ashby, SmartRecruiters and Greenhouse), 60+ categorized Indian/India-relevant employers, plus 30+ job board and career portal search targets
+- Public Bing RSS indexed search over rotating domain-level combined-role queries, including Workday/iCIMS/Jobvite domains and user-prioritized companies, with HTML JobPosting parsing and freshness/expiry checks
 - Actual source diagnostics and scan history, job deduplication, company preference learning, checks for listings withdrawn from successfully enumerated ATS boards, downtime recovery
 - AI evidence-based scoring, missing skill insights, truthful user-reviewed outreach drafts
 - Native Android control center: connect, scan/pause, resume upload, skills/locations/experience settings, AI diagnostics, details, save/relevance feedback, application link
@@ -16,9 +16,9 @@ Native Android client + Windows Python engine. **The tool finds and evaluates jo
 - Private HTTPS access through Tailscale Serve, Android Keystore encrypted bearer token
 
 ### Important limitations and truth in reporting
-The **source directory is a list of search targets**, not proof of live integration with every portal. An ATS board is only operational if its response appears as `ok` under `GET /api/sources`; search indexing can fail, omit jobs or be delayed. Only dated postings are eligible for 85%-threshold push; undated listings show up in the feed as date unverified. Displaying a currently listed ATS vacancy does not guarantee applications can still be submitted. The Google Custom Search JSON API closed to new registrations in 2026, so no universal keyless Google Jobs integration is claimed.
+The **source directory is a list of search targets**, not proof of live integration with every portal. An ATS board is only operational if its response appears as `ok` under `GET /api/sources`; search indexing can fail, omit jobs or be delayed. Freshness alerts require a verified publication date or a recent **posting creation timestamp used as a lower bound**, a geographically eligible job and actual AI inference; jobs without sufficient evidence remain visible as unverified. A creation timestamp is never described as the publication date. Displaying a currently listed ATS vacancy does not guarantee applications can still be submitted. The Google Custom Search JSON API closed to new registrations in 2026, so no universal keyless Google Jobs integration is claimed.
 
-A successful CI build is **not** proof of end-to-end live delivery. The real Windows host, selected OpenCode model, Firebase service account, Android phone, Tailscale connection, and one end-to-end job alert still require verification on your devices.
+The live ATS smoke workflow verifies board accessibility and captures reports, but a successful CI build is **not** proof of end-to-end live delivery. The real Windows host, selected OpenCode model, Firebase service account, Android phone, Tailscale connection, and one end-to-end job alert still require verification on your devices.
 
 ## 1. Start on Windows
 
@@ -40,7 +40,7 @@ Open `http://127.0.0.1:8765/health` in your Windows browser; expect `{"status":"
 For non-default OpenCode servers, copy `backend/.env.example` to `backend/.env` and set `JOBHUNT_OPENCODE_URL`, optionally `JOBHUNT_OPENCODE_PASSWORD` (if your server uses one), and `JOBHUNT_OPENCODE_MODEL=opencode/your-free-model`. These are **local environment settings**, not purchased keys. The UI's **Check OpenCode** uses `GET /api/ai/status` and shows whether free models are advertised.
 
 ### Scan configuration
-The default first scan looks back 30 days. Subsequent scans look back one day, expanding the window up to 30 days if Windows was offline. Scans are scheduled every 15 minutes and one scan starts when the backend starts. High-confidence alerts require a dated posting, a matching role, an AI-verified score of 85+ and configured push. When a source omits a genuine posting date, its job is intentionally unverified and not immediately alerted.
+The default first scan looks back 30 days. Subsequent scans look back one day, expanding the window up to 30 days if Windows was offline. Scans are scheduled every 15 minutes and one scan starts when the backend starts. High-confidence alerts require reliable freshness evidence, an India-eligible matching role, an AI-verified score of 85+, and configured Firebase push. When a source omits a genuine posting date, its job is intentionally unverified and not immediately alerted.
 
 ### Optional auto-start
 From a PowerShell session as your Windows user:
@@ -69,7 +69,7 @@ In the app: paste the Tailscale HTTPS URL and pairing key, **Connect / Refresh**
 
 The APK compiles without Firebase configuration but **it will not receive push alerts until Firebase is configured and you rebuild it**. Follow [Android Firebase setup](android/README.md). Firebase client configuration fields are added as repository Actions secrets; the server requires Firebase service account credentials locally. Never upload a service account JSON or resume to this public repository.
 
-Check `GET /api/alerts` and `GET /api/scan/history` to troubleshoot pending messages. Failed alerts can be requeued through authenticated `POST /api/alerts/retry`.
+Use the Android **Send test notification** button or authenticated `POST /api/notifications/test` to verify phone delivery without waiting for a real opening. Check `GET /api/alerts` and `GET /api/scan/history` to troubleshoot pending messages. Failed alerts can be requeued through authenticated `POST /api/alerts/retry`.
 
 ## 5. Verify it end to end
 
