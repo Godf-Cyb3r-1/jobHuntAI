@@ -41,14 +41,30 @@ def allowed_url(url):
         return False
 
 async def fetch_ashby(client,board):
-    response=await client.get("https://api.ashbyhq.com/posting-api/job-board/"+board)
+    response=await client.get("https://api.ashbyhq.com/posting-api/job-board/"+board,params={"includeCompensation":"true"})
     response.raise_for_status()
     for item in response.json().get("jobs",[]):
         if item.get("isListed") is False:continue
         yield {"source":"ashby","title":item.get("title",""),
                "company":board,"location":item.get("location",""),
                "description":item.get("descriptionPlain") or "",
-               "url":item.get("jobUrl",""),"posted_at":item.get("publishedAt")}
+               "url":item.get("jobUrl",""),"posted_at":item.get("publishedAt"),
+               "salary":(item.get("compensation") or {}).get("compensationTierSummary")}
+
+def salary_from_schema(job):
+    base=job.get("baseSalary")
+    if not isinstance(base,dict):return None
+    value=base.get("value") or {}
+    if not isinstance(value,dict):return None
+    currency=base.get("currency") or value.get("currency") or ""
+    low=value.get("minValue")
+    high=value.get("maxValue")
+    number=value.get("value")
+    if low is not None and high is not None:
+        return str(currency)+" "+str(low)+"–"+str(high)+" "+str(value.get("unitText",""))
+    if number is not None:
+        return str(currency)+" "+str(number)+" "+str(value.get("unitText",""))
+    return None
 
 def parse_job_posting(markup,url):
     soup=BeautifulSoup(markup,"html.parser")
@@ -74,7 +90,8 @@ def parse_job_posting(markup,url):
                     ("addressLocality","addressRegion","addressCountry") if address.get(k)),
                     "description":BeautifulSoup(item.get("description") or "","html.parser").get_text(" ",strip=True),
                     "url":url,"posted_at":item.get("datePosted"),
-                    "valid_through":item.get("validThrough")}
+                    "valid_through":item.get("validThrough"),
+                    "salary":salary_from_schema(item)}
     return None
 
 async def indexed_jobs(client):

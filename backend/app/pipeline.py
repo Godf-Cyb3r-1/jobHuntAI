@@ -19,7 +19,7 @@ def migrate():
     with connect() as db:
         for col,kind in [("last_seen","TEXT"),("model_verified","INTEGER NOT NULL DEFAULT 0"),
                           ("dismissed","INTEGER NOT NULL DEFAULT 0"), ("active_check","TEXT NOT NULL DEFAULT 'unverified'"),
-                          ("source_ref","TEXT"),("closed_at","TEXT")]:
+                          ("source_ref","TEXT"),("closed_at","TEXT"),("salary","TEXT")]:
             existing={r["name"] for r in db.execute("PRAGMA table_info(jobs)")}
             if col not in existing:
                 db.execute(f"ALTER TABLE jobs ADD COLUMN {col} {kind}")
@@ -85,6 +85,7 @@ async def hydrate_posting(client,job):
             if structured.get("posted_at") and not job.get("posted_at"):
                 job["posted_at"]=structured["posted_at"]
             if structured.get("valid_through"):job["valid_through"]=structured["valid_through"]
+            if structured.get("salary") and not job.get("salary"):job["salary"]=structured["salary"]
         job["active_check"]="listed_page_responds"
     except (httpx.HTTPError,ValueError,TypeError):
         pass
@@ -232,14 +233,14 @@ async def scan(notify=None):
         with connect() as db:
             cur=db.execute("""INSERT OR IGNORE INTO jobs
               (id,source,title,company,location,description,url,posted_at,first_seen,
-               last_seen,verified_at,active,score,insight,missing,model_verified,active_check,source_ref)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               last_seen,verified_at,active,score,insight,missing,model_verified,active_check,source_ref,salary)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                (uid,job.get("source","unknown"),job.get("title",""),job.get("company",""),
                 job.get("location",""),(job.get("description") or "")[:25000],
                 normalize_url(url),posted,now().isoformat(),now().isoformat(),
                 now().isoformat() if verified else None,1,result["score"],
                 result["insight"],json.dumps(result["missing"]),int(result["model_verified"]),
-                job.get("active_check","source_listing_only"),job.get("source_ref")))
+                job.get("active_check","source_listing_only"),job.get("source_ref"),job.get("salary")))
             created=cur.rowcount>0
             if created and verified and result["model_verified"] and result["score"]>=int(profile.get("alert_threshold",85)):
                 db.execute("INSERT OR IGNORE INTO notifications(job_id,created_at) VALUES(?,?)",

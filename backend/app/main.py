@@ -206,7 +206,7 @@ def job_details(uid:str):
 def jobs(min_score:int=0,limit:int=100,include_dismissed:bool=False,include_closed:bool=False):
     with connect() as db:
         items=db.execute("SELECT id,source,title,company,location,url,posted_at,first_seen,"
-          "verified_at,active,active_check,source_ref,closed_at,score,insight,missing,saved,model_verified,dismissed FROM jobs WHERE score>=? AND (dismissed=0 OR ?=1) AND (active=1 OR ?=1) "
+          "verified_at,active,active_check,source_ref,closed_at,salary,score,insight,missing,saved,model_verified,dismissed FROM jobs WHERE score>=? AND (dismissed=0 OR ?=1) AND (active=1 OR ?=1) "
           "ORDER BY first_seen DESC LIMIT ?",(min_score,int(include_dismissed),int(include_closed),min(max(limit,1),500))).fetchall()
     return [dict(row) for row in items]
 @app.post("/api/jobs/{uid}/save",dependencies=[Depends(authorized)])
