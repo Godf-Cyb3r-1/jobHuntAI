@@ -343,8 +343,15 @@ class MainActivity:ComponentActivity() {
                         Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
                             Text(job.optString("title"),style=MaterialTheme.typography.titleMedium)
                             Text(job.optString("company")+" · "+job.optString("location"))
-                            Text("${job.optInt("score")}% match · "+
-                                (if(job.isNull("posted_at")) "Posting date unverified" else job.optString("posted_at")))
+                            val dateLabel=when(job.optString("date_basis")) {
+                                "publication_date" -> "Published: "+job.optString("posted_at")
+                                "creation_lower_bound" -> "Created: "+job.optString("created_at")+" (publication date unknown)"
+                                else -> "Posting date unverified"
+                            }
+                            Text("${job.optInt("score")}% match · "+dateLabel)
+                            if(!job.isNull("salary") && job.optString("salary").isNotBlank()) {
+                                Text("Published salary: "+job.optString("salary"),style=MaterialTheme.typography.bodySmall)
+                            }
                             Text(job.optString("insight"),style=MaterialTheme.typography.bodySmall)
                             Text(if(job.optInt("model_verified")==1) "AI evaluated"
                                  else "Fallback estimate (AI not verified)",
