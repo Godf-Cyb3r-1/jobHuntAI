@@ -95,3 +95,18 @@ async def evaluate(job, profile, resume_text=""):
     except (httpx.HTTPError,ValueError,TypeError,KeyError):
         pass
     return fallback
+
+async def probe():
+    """Status only; no model credits are consumed."""
+    endpoint=os.getenv("JOBHUNT_OPENCODE_URL","http://127.0.0.1:4096").rstrip("/")
+    auth=("opencode",os.environ["JOBHUNT_OPENCODE_PASSWORD"]) if os.getenv("JOBHUNT_OPENCODE_PASSWORD") else None
+    try:
+        async with httpx.AsyncClient(timeout=6,auth=auth) as client:
+            reply=await client.get(endpoint+"/provider")
+            reply.raise_for_status()
+            models=models_from_provider(reply.json())
+            return {"reachable":True,"free_models":models[:50],
+                    "configured":os.getenv("JOBHUNT_OPENCODE_MODEL","default model")}
+    except (httpx.HTTPError,ValueError,TypeError):
+        return {"reachable":False,"free_models":[],"configured":os.getenv("JOBHUNT_OPENCODE_MODEL",""),
+                "note":"Start OpenCode serve with a working free model"}

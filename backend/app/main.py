@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .core import connect, init_db, setting, set_setting, DEFAULT_PROFILE
 from .pipeline import scan, migrate
-from .resume import suggest_skills
+from .resume import suggest_skills,suggest_roles
+from .opencode import probe
+from .outreach import draft
 from .catalog import COMPANIES,ATS,DISCOVERY_DOMAINS
 from .discovery import BUILTIN_FEEDS, SEARCH_SITES
 
@@ -138,11 +140,14 @@ def reset_feeds():
 def companies():
     return [{"name":c.name,"tier":c.tier,"domain":c.domain}
             for c in COMPANIES]
+@app.get("/api/ai/status",dependencies=[Depends(authorized)])
+async def ai_status():
+    return await probe()
 @app.get("/api/resume/suggestions",dependencies=[Depends(authorized)])
 def resume_suggestions():
     text=setting("resume_text","")
     confirmed=setting("profile",DEFAULT_PROFILE).get("skills",[])
-    return {"suggested":suggest_skills(text),"confirmed":confirmed,
+    return {"suggested":suggest_skills(text),"suggested_roles":suggest_roles(text),"confirmed":confirmed,
             "note":"Suggestions are not asserted as experience until manually confirmed"}
 class Feedback(BaseModel):
     value:str
@@ -167,6 +172,13 @@ def scan_history(limit:int=25):
     with connect() as db:
         return [dict(x) for x in db.execute("SELECT * FROM scans ORDER BY id DESC LIMIT ?",
                                           (max(1,min(limit,100)),))]
+@app.get("/api/jobs/{uid}/outreach",dependencies=[Depends(authorized)])
+async def outreach(uid:str):
+    with connect() as db:
+        job=db.execute("SELECT title,company,location,description FROM jobs WHERE id=?",
+                       (uid,)).fetchone()
+    if job is None:raise HTTPException(404,"Job not found")
+    return await draft(dict(job),setting("profile",DEFAULT_PROFILE),setting("resume_text",""))
 @app.get("/api/alerts",dependencies=[Depends(authorized)])
 def alerts():
     with connect() as db:

@@ -33,3 +33,14 @@ def suggest_skills(text: str):
     return [skill for skill,patterns in SKILL_TERMS.items()
             if any(re.search(r"(?<![a-z0-9])"+re.escape(p)+r"(?![a-z0-9])",lowered)
                    for p in patterns)]
+
+def suggest_roles(text):
+    """A role-family suggestion is not a claim of eligibility."""
+    low=text.lower()
+    options={
+        "Penetration Tester":["penetration testing","penetration tester","pentesting","pentest"],
+        "Application Security Engineer":["application security","appsec","web application security"],
+        "Offensive Security Engineer":["offensive security","red teaming","red team"],
+        "Product Security Engineer":["product security","secure development lifecycle","secure code review"],
+    }
+    return [role for role,evidence in options.items() if any(x in low for x in evidence)]
