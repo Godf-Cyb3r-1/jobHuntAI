@@ -120,7 +120,7 @@ def put_feeds(feeds:list[Feed]):
     if len(feeds)>500: raise HTTPException(400,"Too many feeds")
     import re
     for feed in feeds:
-        if feed.type not in ("lever","greenhouse","ashby") or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",feed.name):
+        if feed.type not in ("lever","greenhouse","ashby","smartrecruiters") or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",feed.name):
             raise HTTPException(422,"Invalid ATS feed")
     set_setting("feeds",[f.model_dump() for f in feeds]); return {"count":len(feeds)}
 @app.get("/api/sources",dependencies=[Depends(authorized)])

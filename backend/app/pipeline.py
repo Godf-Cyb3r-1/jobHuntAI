@@ -13,6 +13,7 @@ from .core import (
 from .catalog import ATS
 from .discovery import fetch_ashby,indexed_jobs,parse_job_posting,allowed_url
 from .opencode import evaluate
+from .smartrecruiters import fetch_smartrecruiters
 
 def migrate():
     with connect() as db:
@@ -84,7 +85,7 @@ def in_region(location):
     cities=("india","indian","bengaluru","bangalore","hyderabad","chennai","pune","mumbai",
             "delhi","noida","gurugram","gurgaon","kolkata","bhubaneswar","kochi",
             "coimbatore","tamil nadu","erode","trivandrum","thiruvananthapuram")
-    if any(x in normalized for x in cities):return True
+    if any(x in normalized for x in cities) or normalized.strip().endswith(", in"):return True
     # Remote jobs require more validation before being considered eligible in India.
     if "remote" in normalized:
         excluded=("united states","usa only","us only","north america only",
@@ -113,6 +114,7 @@ async def collect_sources(process, diagnostics):
                 if kind=="lever": stream=fetch_lever(client,name)
                 elif kind=="greenhouse":stream=fetch_greenhouse(client,name)
                 elif kind=="ashby":stream=fetch_ashby(client,name)
+                elif kind=="smartrecruiters":stream=fetch_smartrecruiters(client,name)
                 else:continue
                 async for job in stream:
                     count+=1
