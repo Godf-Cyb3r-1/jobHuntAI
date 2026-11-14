@@ -8,7 +8,7 @@ from app.core import fetch_greenhouse,fetch_lever
 from app.discovery import fetch_ashby
 from app.smartrecruiters import fetch_smartrecruiters
 from app.core import role_matches,DEFAULT_PROFILE,posted_recent
-from app.pipeline import in_region
+from app.pipeline import in_region,hydrate_posting
 import xml.etree.ElementTree as ET
 
 async def main():
@@ -31,11 +31,15 @@ async def main():
                         relevant+=1
                         if in_region(job.get("location","")):
                             in_india+=1
-                            if posted_recent(job.get("posted_at"),30):fresh+=1
                             if len(samples)<3:
+                                enhanced=await hydrate_posting(client,dict(job))
+                                postdate=enhanced.get("posted_at") if enhanced else None
+                                if posted_recent(postdate,30):fresh+=1
                                 samples.append({"title":job.get("title"),
                                                 "location":job.get("location"),
-                                                "posted_at":job.get("posted_at")})
+                                                "posted_at":postdate,
+                                                "page_status":enhanced.get("active_check","unverified") if enhanced else "closed",
+                                                "url":job.get("url")})
                 item={"feed":kind+":"+name,"status":"ok","total_jobs":count,
                       "potentially_relevant":relevant,"india_role_matches":in_india,
                       "dated_last_30_days":fresh,"samples":samples}
