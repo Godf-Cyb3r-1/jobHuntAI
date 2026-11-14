@@ -89,7 +89,7 @@ async def indexed_jobs(client):
     selected=[queries[(start+i)%len(queries)] for i in range(batch_size)]
     for term,site in selected:
         try:
-                res=await client.get("https://www.bing.com/search",
+            res=await client.get("https://www.bing.com/search",
                                  params={"q":"site:"+site+" "+term,"format":"rss"})
             res.raise_for_status()
             root=ET.fromstring(res.text)
