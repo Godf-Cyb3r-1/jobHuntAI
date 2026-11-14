@@ -102,6 +102,10 @@ class MainActivity:ComponentActivity() {
     var showDiagnostics by remember { mutableStateOf(false) }
     var roles by remember { mutableStateOf(prefs.getString("roles","Penetration Tester, Application Security Engineer") ?: "") }
     var skills by remember { mutableStateOf(prefs.getString("skills","") ?: "") }
+    var locations by remember { mutableStateOf(prefs.getString("locations","India, Remote") ?: "India, Remote") }
+    var yearsExperience by remember { mutableStateOf(prefs.getString("years","") ?: "") }
+    var resumeSuggestions by remember { mutableStateOf(emptyList<String>()) }
+    var fullDetails by remember { mutableStateOf<String?>(null) }
     var paused by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope=rememberCoroutineScope()
@@ -137,7 +141,10 @@ class MainActivity:ComponentActivity() {
             if(bytes.size>3_000_000) throw IOException("Resume exceeds 3 MB")
             val mime=ctx.contentResolver.getType(uri)
             val name=if(mime=="application/pdf") "resume.pdf" else "resume.docx"
-            api.upload(bytes,name)
+            val result=JSONObject(api.upload(bytes,name))
+            val candidates=result.optJSONArray("suggested_skills") ?: JSONArray()
+            val list=(0 until candidates.length()).map { candidates.getString(it) }
+            withContext(Dispatchers.Main) {resumeSuggestions=list}
         }
     }
     LaunchedEffect(server,token) {
@@ -153,6 +160,19 @@ class MainActivity:ComponentActivity() {
                 }
             }
         }
+    }
+    LaunchedEffect(Unit) {
+        if(server.startsWith("https://") && token.isNotBlank())refresh()
+    }
+    if(fullDetails!=null) {
+        AlertDialog(
+            onDismissRequest={fullDetails=null},
+            title={Text("Job details")},
+            text={Column(Modifier.heightIn(max=470.dp).verticalScroll(rememberScrollState())) {
+                Text(fullDetails ?: "")
+            }},
+            confirmButton={TextButton(onClick={fullDetails=null}){Text("Close")}}
+        )
     }
     Scaffold(topBar={ Surface(tonalElevation=3.dp) {
         Text("JobHuntAI  ·  Control Center",modifier=Modifier.padding(20.dp),style=MaterialTheme.typography.titleLarge)
@@ -222,6 +242,17 @@ class MainActivity:ComponentActivity() {
                             }
                         },enabled=!busy){Text("History")}
                     }
+                    OutlinedButton(enabled=!busy,onClick={
+                        execute("AI status") { api ->
+                            val ai=JSONObject(api.request("/api/ai/status"))
+                            val models=ai.optJSONArray("free_models")?.length() ?: 0
+                            withContext(Dispatchers.Main) {
+                                sourceStatus=(if(ai.optBoolean("reachable")) "OpenCode online"
+                                    else "OpenCode offline")+" · $models advertised free models"
+                                showDiagnostics=true
+                            }
+                        }
+                    }) {Text("Check OpenCode")}
                     if(showDiagnostics) {
                         Text(sourceStatus,style=MaterialTheme.typography.bodySmall)
                         if(scanHistory.isNotEmpty()) Text(scanHistory,style=MaterialTheme.typography.bodySmall)
@@ -234,6 +265,17 @@ class MainActivity:ComponentActivity() {
                     Text("Profile",style=MaterialTheme.typography.titleMedium)
                     OutlinedTextField(roles,{roles=it},label={Text("Allowed roles (comma separated)")},modifier=Modifier.fillMaxWidth())
                     OutlinedTextField(skills,{skills=it},label={Text("Verified skills (comma separated)")},modifier=Modifier.fillMaxWidth())
+                    OutlinedTextField(locations,{locations=it},label={Text("Preferred locations (comma separated)")},modifier=Modifier.fillMaxWidth())
+                    OutlinedTextField(yearsExperience,{yearsExperience=it},
+                        label={Text("Years of experience (optional)")},modifier=Modifier.fillMaxWidth())
+                    if(resumeSuggestions.isNotEmpty()) {
+                        Text("Resume suggestions — confirm only skills you know: "+
+                            resumeSuggestions.joinToString(", "),style=MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick={
+                            val existing=skills.split(",").map{it.trim()}.filter{it.isNotEmpty()}
+                            skills=(existing+resumeSuggestions).distinct().joinToString(", ")
+                        }){Text("Use suggested skills")}
+                    }
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         Button(onClick={
                             execute("Save profile") { api ->
@@ -241,9 +283,15 @@ class MainActivity:ComponentActivity() {
                                 val skillValues=skills.split(",").map{it.trim()}.filter{it.isNotEmpty()}
                                 val profile=JSONObject(api.request("/api/profile"))
                                 profile.put("roles",JSONArray(roleValues)); profile.put("skills",JSONArray(skillValues))
+                                val places=locations.split(",").map{it.trim()}.filter{it.isNotEmpty()}
+                                profile.put("locations",JSONArray(places))
+                                if(yearsExperience.toDoubleOrNull()!=null)
+                                    profile.put("years_experience",yearsExperience.toDouble())
+                                else profile.put("years_experience",JSONObject.NULL)
                                 profile.put("strict",true);profile.put("initial_days",30);profile.put("alert_threshold",85)
                                 api.request("/api/profile","PUT",profile.toString())
-                                prefs.edit().putString("roles",roles).putString("skills",skills).apply()
+                                prefs.edit().putString("roles",roles).putString("skills",skills)
+                                    .putString("locations",locations).putString("years",yearsExperience).apply()
                             }
                         },enabled=!busy){Text("Save preferences")}
                         OutlinedButton(onClick={filePicker.launch(arrayOf("application/pdf",
