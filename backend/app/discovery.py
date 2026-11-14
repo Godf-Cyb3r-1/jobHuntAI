@@ -24,6 +24,10 @@ SEARCH_SITES=[
  "careers.deloitte.com","careers.ey.com","jobs.pwc.com",
  "careers.kpmg.com","careers.oracle.com","careers.salesforce.com",
  "careers.adobe.com","careers.paypal.com","jobs.intuit.com",
+ "www.linkedin.com","in.indeed.com","www.naukri.com",
+ "www.foundit.in","www.timesjobs.com","www.shine.com",
+ "www.instahyre.com","www.hirist.tech","wellfound.com",
+ "cutshort.io",
 ]
 SEARCH_TERMS=['"penetration tester" India','"application security" India',
               '"offensive security" India','"red team" India']
@@ -75,23 +79,30 @@ def parse_job_posting(markup,url):
 async def indexed_jobs(client):
     """Public Bing RSS dorks; errors and missing results are normal, not guaranteed coverage."""
     seen=set()
-    for term in SEARCH_TERMS:
-        for site in SEARCH_SITES:
-            try:
+    # Rotate a bounded portion of the search matrix each quarter hour;
+    # avoid hammering public search providers on every scan.
+    from datetime import datetime, timezone
+    queries=[(term,site) for site in SEARCH_SITES for term in SEARCH_TERMS]
+    batch_size=16
+    slot=int(datetime.now(timezone.utc).timestamp()//900)
+    start=(slot*batch_size)%len(queries)
+    selected=[queries[(start+i)%len(queries)] for i in range(batch_size)]
+    for term,site in selected:
+        try:
                 res=await client.get("https://www.bing.com/search",
-                                     params={"q":"site:"+site+" "+term,"format":"rss"})
-                res.raise_for_status()
-                root=ET.fromstring(res.text)
-            except (httpx.HTTPError,ET.ParseError):continue
-            for item in root.findall(".//item")[:8]:
-                url=(item.findtext("link") or "").strip()
-                if not allowed_url(url) or url in seen:continue
-                seen.add(url)
-                try:
-                    response=await client.get(url)
-                    if not allowed_url(str(response.url)):continue
-                    response.raise_for_status()
-                    if "text/html" not in response.headers.get("content-type",""):continue
-                    job=parse_job_posting(response.text[:500000],str(response.url))
-                    if job:yield job
-                except (httpx.HTTPError,ValueError):continue
+                                 params={"q":"site:"+site+" "+term,"format":"rss"})
+            res.raise_for_status()
+            root=ET.fromstring(res.text)
+        except (httpx.HTTPError,ET.ParseError):continue
+        for item in root.findall(".//item")[:8]:
+            url=(item.findtext("link") or "").strip()
+            if not allowed_url(url) or url in seen:continue
+            seen.add(url)
+            try:
+                response=await client.get(url)
+                if not allowed_url(str(response.url)):continue
+                response.raise_for_status()
+                if "text/html" not in response.headers.get("content-type",""):continue
+                job=parse_job_posting(response.text[:500000],str(response.url))
+                if job:yield job
+            except (httpx.HTTPError,ValueError):continue
