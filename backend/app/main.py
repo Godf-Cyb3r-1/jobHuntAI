@@ -78,6 +78,7 @@ class Profile(BaseModel):
     exclude_roles:list[str]=Field(default_factory=list)
     strict:bool=True
     years_experience:float|None=Field(default=None,ge=0,le=60)
+    preferred_companies:list[str]=Field(default_factory=list,max_length=20)
     initial_days:int=Field(default=30,ge=1,le=30)
     alert_threshold:int=Field(default=85,ge=0,le=100)
 class Feed(BaseModel):

@@ -94,7 +94,8 @@ ATS = [
 JOB_BOARDS = ["www.linkedin.com","in.indeed.com","www.naukri.com","www.foundit.in",
               "www.timesjobs.com","www.shine.com","www.instahyre.com",
               "www.hirist.tech","wellfound.com","cutshort.io"]
-ATS_HOSTS = ["jobs.smartrecruiters.com","jobs.lever.co","jobs.ashbyhq.com","boards.greenhouse.io",
+ATS_HOSTS = ["jobs.smartrecruiters.com","jobs.lever.co","jobs.ashbyhq.com","boards.greenhouse.io","myworkdayjobs.com","jobs.smartrecruiters.com",
+             "jobs.jobvite.com","icims.com",
              "job-boards.greenhouse.io"]
 DISCOVERY_DOMAINS = sorted(set([c.domain for c in COMPANIES]+JOB_BOARDS+ATS_HOSTS))
 SEARCH_TERMS = ['"penetration tester" India','"application security engineer" India',

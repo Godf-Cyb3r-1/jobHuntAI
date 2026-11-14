@@ -15,3 +15,8 @@ def test_salary_from_schema():
     s=salary_from_schema({"baseSalary":{"currency":"INR","value":{
         "minValue":1200000,"maxValue":1800000,"unitText":"YEAR"}}})
     assert "INR" in s and "1200000" in s
+
+def test_workday_hosts():
+    from app.discovery import allowed_url
+    assert allowed_url("https://company.wd5.myworkdayjobs.com/en-US/job/123")
+    assert not allowed_url("https://myworkdayjobs.com.attacker.example/1")

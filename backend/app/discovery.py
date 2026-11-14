@@ -35,8 +35,11 @@ SEARCH_TERMS=['"penetration tester" India','"application security" India',
 def allowed_url(url):
     try:
         parsed=urlparse(url)
-        return (parsed.scheme=="https" and parsed.hostname in DISCOVERY_DOMAINS
-                and not parsed.username and not parsed.password)
+        host=(parsed.hostname or "").lower()
+        trusted=host in DISCOVERY_DOMAINS or any(host.endswith("."+base)
+             for base in ("myworkdayjobs.com","myworkdaysite.com",
+                          "icims.com","jobvite.com","smartrecruiters.com"))
+        return parsed.scheme=="https" and trusted and not parsed.username and not parsed.password
     except ValueError:
         return False
 
@@ -98,18 +101,28 @@ async def indexed_jobs(client):
     """Public Bing RSS dorks; errors and missing results are normal, not guaranteed coverage."""
     seen=set()
     good_responses=0
-    # Rotate a bounded portion of the search matrix each quarter hour;
-    # avoid hammering public search providers on every scan.
+    # One combined role query per domain. Prioritize explicitly preferred employers.
     from datetime import datetime, timezone
-    queries=[(term,site) for site in DISCOVERY_DOMAINS for term in EXPANDED_TERMS]
-    batch_size=16
+    from .catalog import COMPANIES
+    from .core import setting
+    preferred=setting("profile",{}).get("preferred_companies",[])
+    prioritized=[]
+    for company in COMPANIES:
+        if any(text.casefold() in company.name.casefold() or
+               text.casefold() in company.domain.casefold()
+               for text in preferred if isinstance(text,str) and len(text)>2):
+            prioritized.append(company.domain)
+    priority=list(dict.fromkeys(prioritized))[:6]
+    regular=[domain for domain in DISCOVERY_DOMAINS if domain not in priority]
+    batch_size=14
     slot=int(datetime.now(timezone.utc).timestamp()//900)
-    start=(slot*batch_size)%len(queries)
-    selected=[queries[(start+i)%len(queries)] for i in range(batch_size)]
-    for term,site in selected:
+    start=(slot*batch_size)%len(regular)
+    selected=priority+[regular[(start+i)%len(regular)] for i in range(min(batch_size,len(regular)))]
+    search_query='("penetration tester" OR "application security" OR "offensive security" OR "red team" OR "product security") India'
+    for site in selected:
         try:
             res=await client.get("https://www.bing.com/search",
-                                 params={"q":"site:"+site+" "+term,"format":"rss"})
+                                 params={"q":"site:"+site+" "+search_query,"format":"rss"})
             res.raise_for_status()
             root=ET.fromstring(res.text)
             if root.tag.lower()!="rss":continue
