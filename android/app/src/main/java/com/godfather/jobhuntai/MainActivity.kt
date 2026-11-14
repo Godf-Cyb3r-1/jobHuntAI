@@ -332,6 +332,34 @@ class MainActivity:ComponentActivity() {
                                     }
                                 }){Text("Dismiss")}
                             }
+                            Row(horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                                TextButton(enabled=!busy,onClick={
+                                    execute("Job details") { api ->
+                                        val full=JSONObject(api.request("/api/jobs/"+job.optString("id")))
+                                        withContext(Dispatchers.Main) {
+                                            fullDetails=full.optString("description","No description available")
+                                        }
+                                    }
+                                }){Text("Details")}
+                                TextButton(enabled=!busy,onClick={
+                                    execute("Saved job") { api ->
+                                        api.request("/api/jobs/"+job.optString("id")+"/save","POST")
+                                    }
+                                }){Text("Save")}
+                                TextButton(enabled=!busy,onClick={
+                                    execute("Outreach draft") { api ->
+                                        val draft=JSONObject(api.request("/api/jobs/"+job.optString("id")+"/outreach"))
+                                        val share=Intent(Intent.ACTION_SEND).apply {
+                                            type="text/plain"
+                                            putExtra(Intent.EXTRA_SUBJECT,draft.optString("subject"))
+                                            putExtra(Intent.EXTRA_TEXT,draft.optString("body"))
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            ctx.startActivity(Intent.createChooser(share,"Review outreach draft"))
+                                        }
+                                    }
+                                }){Text("Draft")}
+                            }
                             TextButton(onClick={
                                 val url=job.optString("url")
                                 if(url.startsWith("https://")) ctx.startActivity(
