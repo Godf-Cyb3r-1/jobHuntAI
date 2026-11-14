@@ -22,7 +22,7 @@ def api_secret():
     key=secrets.token_urlsafe(32)
     path.parent.mkdir(parents=True,exist_ok=True)
     with path.open("x",encoding="utf-8") as handle:
-        handle.write(key+"\\n")
+        handle.write(key+"\n")
     try: path.chmod(0o600)
     except OSError: pass
     return key
