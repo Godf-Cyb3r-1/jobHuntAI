@@ -85,7 +85,16 @@ class MainActivity:ComponentActivity() {
 @Composable fun JobHuntScreen(activity:Activity) {
     val prefs=remember { activity.getSharedPreferences("jobhunt",0) }
     var server by remember { mutableStateOf(prefs.getString("server","") ?: "") }
-    var token by remember { mutableStateOf(prefs.getString("token","") ?: "") }
+    val secretStore=remember {
+        TokenStore(activity).also { secure ->
+            val old=prefs.getString("token",null)
+            if(!old.isNullOrBlank()) {
+                try {secure.put(old);prefs.edit().remove("token").apply()}
+                catch(_:Exception) {}
+            }
+        }
+    }
+    var token by remember { mutableStateOf(secretStore.get()) }
     var status by remember { mutableStateOf("Connect to your Windows server") }
     var jobs by remember { mutableStateOf(emptyList<JSONObject>()) }
     var sourceStatus by remember { mutableStateOf("") }
@@ -160,11 +169,12 @@ class MainActivity:ComponentActivity() {
                         visualTransformation=PasswordVisualTransformation(),modifier=Modifier.fillMaxWidth(),singleLine=true)
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         Button(onClick={
-                            prefs.edit().putString("server",server.trim()).putString("token",token.trim()).apply()
+                            secretStore.put(token.trim())
+                            prefs.edit().putString("server",server.trim()).apply()
                             refresh()
                         },enabled=!busy) { Text("Connect / Refresh") }
                         OutlinedButton(onClick={
-                            token="";prefs.edit().remove("token").apply();jobs=emptyList();status="Disconnected"
+                            token="";secretStore.clear();jobs=emptyList();status="Disconnected"
                         }) {Text("Disconnect")}
                     }
                 }
