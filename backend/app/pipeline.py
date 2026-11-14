@@ -95,17 +95,28 @@ async def hydrate_posting(client,job):
 def in_region(location):
     if not location:return True
     normalized=location.casefold()
-    cities=("india","indian","bengaluru","bangalore","hyderabad","chennai","pune","mumbai",
-            "delhi","noida","gurugram","gurgaon","kolkata","bhubaneswar","kochi",
-            "coimbatore","tamil nadu","erode","trivandrum","thiruvananthapuram")
-    if any(x in normalized for x in cities) or normalized.strip().endswith(", in"):return True
-    # Remote jobs require more validation before being considered eligible in India.
+    india=("india","indian","bengaluru","bangalore","hyderabad","chennai","pune","mumbai",
+           "delhi","noida","gurugram","gurgaon","kolkata","bhubaneswar","kochi",
+           "coimbatore","tamil nadu","erode","trivandrum","thiruvananthapuram")
+    if any(x in normalized for x in india) or normalized.strip().endswith(", in"):
+        return True
     if "remote" in normalized:
-        excluded=("united states","usa only","us only","north america only",
-                  "europe only","uk only","canada only")
-        return not any(x in normalized for x in excluded)
+        excluded=r"\b(?:us|usa|united states|canada|uk|united kingdom|europe|emea|germany|france|netherlands|australia)\b"
+        return re.search(excluded,normalized) is None
     return False
 
+def region_confirmed(job):
+    """Unknown international eligibility must not trigger a confident push."""
+    location=(job.get("location") or "").casefold()
+    if not location:return False
+    if "remote" not in location:return in_region(location)
+    if any(x in location for x in ("india","indian")):return True
+    text=(job.get("description") or "").casefold()
+    exclusions=r"\b(?:us only|usa only|united states only|canada only|uk only|europe only)\b"
+    if re.search(exclusions,text):return False
+    global_terms=("worldwide","work from anywhere","remote globally","global remote",
+                  "anywhere in the world","remote india")
+    return any(x in text for x in global_terms)
 
 def location_allowed(location,profile):
     preferences=[str(x).casefold() for x in profile.get("locations",["India","Remote"])]
@@ -251,7 +262,7 @@ async def scan(notify=None):
                 job.get("active_check","source_listing_only"),job.get("source_ref"),job.get("salary"),
                 created_at,date_basis))
             created=cur.rowcount>0
-            if created and verified and result["model_verified"] and result["score"]>=int(profile.get("alert_threshold",85)):
+            if created and verified and region_confirmed(job) and result["model_verified"] and result["score"]>=int(profile.get("alert_threshold",85)):
                 db.execute("INSERT OR IGNORE INTO notifications(job_id,created_at) VALUES(?,?)",
                            (uid,now().isoformat()))
         if created:added+=1

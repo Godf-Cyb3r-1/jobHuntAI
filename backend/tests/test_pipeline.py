@@ -27,3 +27,11 @@ def test_experience():
     job={"description":"Minimum 6 years of experience in penetration testing."}
     assert not experience_eligible(job,{"years_experience":2})
     assert experience_eligible(job,{"years_experience":5})
+
+from app.pipeline import region_confirmed
+def test_remote_geography():
+    assert not in_region("Remote - Canada")
+    assert not in_region("US - Remote")
+    assert not region_confirmed({"location":"Remote","description":"Work on APIs."})
+    assert region_confirmed({"location":"Remote","description":"Work from anywhere in the world."})
+    assert region_confirmed({"location":"Remote - India","description":"AppSec testing"})
