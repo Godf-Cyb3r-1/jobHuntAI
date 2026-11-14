@@ -11,13 +11,13 @@ from .core import (
     fetch_greenhouse,fetch_lever,DEFAULT_PROFILE
 )
 from .catalog import ATS
-from .discovery import fetch_ashby,indexed_jobs
+from .discovery import fetch_ashby,indexed_jobs,parse_job_posting,allowed_url
 from .opencode import evaluate
 
 def migrate():
     with connect() as db:
         for col,kind in [("last_seen","TEXT"),("model_verified","INTEGER NOT NULL DEFAULT 0"),
-                          ("dismissed","INTEGER NOT NULL DEFAULT 0")]:
+                          ("dismissed","INTEGER NOT NULL DEFAULT 0"), ("active_check","TEXT NOT NULL DEFAULT 'unverified'")]:
             existing={r["name"] for r in db.execute("PRAGMA table_info(jobs)")}
             if col not in existing:
                 db.execute(f"ALTER TABLE jobs ADD COLUMN {col} {kind}")
@@ -42,6 +42,41 @@ def source_report(name,status,items=0,error=""):
             ON CONFLICT(name) DO UPDATE SET checked_at=excluded.checked_at,
             status=excluded.status, items=excluded.items, error=excluded.error,
             failures=excluded.failures""",(name,now().isoformat(),status,items,error[:500],failures))
+
+
+def feedback_adjustment(job):
+    """Bounded preference adjustment; never overrides strict role-family filtering."""
+    with connect() as db:
+        votes=db.execute("""SELECT f.value FROM feedback f JOIN jobs j ON j.id=f.job_id
+          WHERE lower(j.company)=lower(?) ORDER BY f.id DESC LIMIT 25""",
+          (job.get("company",""),)).fetchall()
+    bad=sum(x["value"] in ("dismiss","irrelevant") for x in votes)
+    good=sum(x["value"]=="relevant" for x in votes)
+    return max(-20,min(10,good*3-bad*5))
+
+async def hydrate_posting(client,job):
+    """Read JobPosting metadata from allowlisted pages, without following redirects."""
+    url=job.get("url","")
+    if not allowed_url(url):return job
+    try:
+        page=await client.get(url,timeout=12,follow_redirects=False)
+        if page.status_code in (404,410):return None
+        if page.status_code!=200:return job
+        if "text/html" not in page.headers.get("content-type",""):return job
+        markup=page.text[:500000]
+        lowered=markup.lower()
+        if any(x in lowered for x in ("this job is no longer accepting applications",
+            "this position has been filled","this job is no longer available")):
+            return None
+        structured=parse_job_posting(markup,url)
+        if structured:
+            if structured.get("posted_at") and not job.get("posted_at"):
+                job["posted_at"]=structured["posted_at"]
+            if structured.get("valid_through"):job["valid_through"]=structured["valid_through"]
+        job["active_check"]="listed_page_responds"
+    except (httpx.HTTPError,ValueError,TypeError):
+        pass
+    return job
 
 def in_region(location):
     if not location:return True
@@ -118,6 +153,7 @@ async def scan(notify=None):
             days=min(30,max(1,int(elapsed.total_seconds()//86400)+1))
         except (ValueError,TypeError):pass
     added=0;updated=0;skipped=0;errors=[]
+    page_client=httpx.AsyncClient(timeout=12,follow_redirects=False)
     async def ingest(job):
         nonlocal added,updated,skipped
         url=job.get("url","")
@@ -125,27 +161,37 @@ async def scan(notify=None):
         if not role_matches(job,profile) or not in_region(job.get("location","")):
             skipped+=1;return
         if not valid_until(job.get("valid_through")):skipped+=1;return
-        posted=job.get("posted_at")
-        if posted and not posted_recent(posted,days):skipped+=1;return
         uid=job_id(url)
         with connect() as db:
             existing=db.execute("SELECT id FROM jobs WHERE id=?",(uid,)).fetchone()
         if existing:
             with connect() as db:
-                db.execute("UPDATE jobs SET last_seen=?,active=1 WHERE id=?",(now().isoformat(),uid))
-            updated+=1;return
+                db.execute("UPDATE jobs SET last_seen=?,active=1 WHERE id=?",
+                           (now().isoformat(),uid))
+            updated+=1
+            return
+        job=await hydrate_posting(page_client,job)
+        if job is None:skipped+=1;return
+        if not valid_until(job.get("valid_through")):skipped+=1;return
+        posted=job.get("posted_at")
+        if posted and not posted_recent(posted,days):skipped+=1;return
         result=await evaluate(job,profile,setting("resume_text",""))
+        adjustment=feedback_adjustment(job)
+        if adjustment:
+            result["score"]=max(0,min(100,result["score"]+adjustment))
+            result["insight"]+=f" (Past feedback adjustment: {adjustment:+d} points.)"
         verified=posted_recent(posted,days) if posted else False
         with connect() as db:
             cur=db.execute("""INSERT OR IGNORE INTO jobs
               (id,source,title,company,location,description,url,posted_at,first_seen,
-               last_seen,verified_at,active,score,insight,missing,model_verified)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               last_seen,verified_at,active,score,insight,missing,model_verified,active_check)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                (uid,job.get("source","unknown"),job.get("title",""),job.get("company",""),
                 job.get("location",""),(job.get("description") or "")[:25000],
                 normalize_url(url),posted,now().isoformat(),now().isoformat(),
                 now().isoformat() if verified else None,1,result["score"],
-                result["insight"],json.dumps(result["missing"]),int(result["model_verified"])))
+                result["insight"],json.dumps(result["missing"]),int(result["model_verified"]),
+                job.get("active_check","source_listing_only")))
             created=cur.rowcount>0
             if created and verified and result["model_verified"] and result["score"]>=int(profile.get("alert_threshold",85)):
                 db.execute("INSERT OR IGNORE INTO notifications(job_id,created_at) VALUES(?,?)",
@@ -181,6 +227,7 @@ async def scan(notify=None):
                                    (str(exc)[:300],item["id"]))
     except Exception as exc:
         status="error";errors.append(str(exc)[:500])
+    await page_client.aclose()
     with connect() as db:
         db.execute("UPDATE scans SET ended=?,status=?,found=?,error=? WHERE id=?",
                    (now().isoformat(),status,added,"; ".join(errors),scan_id))
