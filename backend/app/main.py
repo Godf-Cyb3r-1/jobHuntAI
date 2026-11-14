@@ -14,6 +14,7 @@ from .resume import suggest_skills,suggest_roles
 from .opencode import probe
 from .outreach import draft
 from .resume_ai import analyze
+from .fcm import send_notification,configured as fcm_configured
 from .catalog import COMPANIES,ATS,DISCOVERY_DOMAINS
 from .discovery import BUILTIN_FEEDS, SEARCH_SITES
 
@@ -40,34 +41,19 @@ async def authorized(authorization: str|None=Header(default=None)):
     if not authorization or not secrets.compare_digest(authorization,"Bearer "+secret):
         raise HTTPException(401,"Invalid API token")
 async def push(uid):
-    project=os.getenv("JOBHUNT_FCM_PROJECT")
-    credentials=os.getenv("JOBHUNT_FCM_TOKEN_FILE")
-    if not project or not credentials: return False
-    try:
-        from google.oauth2 import service_account
-        from google.auth.transport.requests import Request
-        creds=service_account.Credentials.from_service_account_file(
-            credentials,scopes=["https://www.googleapis.com/auth/firebase.messaging"])
-        await asyncio.to_thread(creds.refresh,Request())
-        with connect() as db:
-            job=db.execute("SELECT * FROM jobs WHERE id=?",(uid,)).fetchone()
-            devices=[r["token"] for r in db.execute("SELECT token FROM devices")]
-        import httpx
-        async with httpx.AsyncClient(timeout=15) as client:
-            for token in devices:
-                res=await client.post(f"https://fcm.googleapis.com/v1/projects/{project}/messages:send",
-                   headers={"Authorization":"Bearer "+creds.token},
-                   json={"message":{"token":token,
-                         "notification":{"title":job["title"]+" · "+job["company"],
-                                         "body":str(job["score"])+"% match · "+(job["insight"] or "")[:100]},
-                         "data":{"job_id":uid,"url":job["url"]}}})
-                res.raise_for_status()
-        if not devices:return False
-        with connect() as db: db.execute("UPDATE jobs SET notified=1 WHERE id=?",(uid,))
+    with connect() as db:
+        job=db.execute("SELECT * FROM jobs WHERE id=?",(uid,)).fetchone()
+    if not job:return False
+    result=await send_notification(job["title"]+" · "+job["company"],
+        str(job["score"])+"% match · "+(job["insight"] or "")[:100],
+        {"job_id":uid,"url":job["url"]})
+    if result["sent"]>0:
+        with connect() as db:db.execute("UPDATE jobs SET notified=1 WHERE id=?",(uid,))
         return True
-    except Exception as exc:
-        print("Push delivery failed:",str(exc)[:200])
-        raise
+    if result["status"]=="delivery_failed":
+        raise RuntimeError(str(result.get("errors",[]))[:300])
+    return False
+
 async def run_scan():
     if lock.locked(): return {"status":"already_running"}
     async with lock: return await scan(push)
@@ -109,7 +95,8 @@ def status():
         latest=db.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
     return {"paused":setting("paused",False),"initial_done":setting("initial_done",False),
             "jobs":total,"scan":dict(latest) if latest else None,
-            "opencode_url":os.getenv("JOBHUNT_OPENCODE_URL","http://127.0.0.1:4096")}
+            "opencode_url":os.getenv("JOBHUNT_OPENCODE_URL","http://127.0.0.1:4096"),
+            "push_configured":fcm_configured()}
 @app.get("/api/profile",dependencies=[Depends(authorized)])
 def get_profile(): return setting("profile",DEFAULT_PROFILE)
 @app.put("/api/profile",dependencies=[Depends(authorized)])
@@ -186,6 +173,14 @@ async def outreach(uid:str):
                        (uid,)).fetchone()
     if job is None:raise HTTPException(404,"Job not found")
     return await draft(dict(job),setting("profile",DEFAULT_PROFILE),setting("resume_text",""))
+@app.post("/api/notifications/test",dependencies=[Depends(authorized)])
+async def test_push_notification():
+    result=await send_notification("JobHuntAI test notification",
+        "Phone alerts are connected. This is a test, not a job opening.",
+        {"type":"test"})
+    if result["status"]!="sent":
+        raise HTTPException(status_code=409,detail=result)
+    return result
 @app.get("/api/alerts",dependencies=[Depends(authorized)])
 def alerts():
     with connect() as db:
