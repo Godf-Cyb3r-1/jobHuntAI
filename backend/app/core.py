@@ -81,6 +81,17 @@ async def fetch_greenhouse(client, board):
     url=f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
     response=await client.get(url); response.raise_for_status()
     for j in response.json().get("jobs",[]):
+        # The list can omit first_published; retrieve details for relevant titles.
+        if not j.get("first_published") and j.get("id") and any(
+                term in (j.get("title") or "").lower() for term in ROLE_TERMS):
+            try:
+                detail=await client.get(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{j['id']}")
+                detail.raise_for_status()
+                expanded=detail.json()
+                j["first_published"]=expanded.get("first_published")
+                j["application_deadline"]=expanded.get("application_deadline")
+            except (httpx.HTTPError,ValueError,TypeError):
+                pass
         # first_published is publication evidence; updated_at is not.
         yield {"source":"greenhouse","title":j.get("title",""),"company":board,
                "location":(j.get("location") or {}).get("name",""),

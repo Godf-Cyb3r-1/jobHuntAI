@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - 'backend/source_smoke.py'
+      - 'backend/app/catalog.py'
+      - 'backend/app/core.py'
+      - 'backend/app/discovery.py'
+      - 'backend/app/smartrecruiters.py'
       - '.github/workflows/source-smoke.yml'
 jobs:
   smoke:
