@@ -226,6 +226,7 @@ async def scan(notify=None):
         with connect() as db:
             existing=db.execute("SELECT id FROM jobs WHERE id=?",(uid,)).fetchone()
         if existing:
+            # Existing candidates can be re-scored separately via /api/jobs/reevaluate.
             with connect() as db:
                 db.execute("UPDATE jobs SET last_seen=?,active=1,closed_at=NULL WHERE id=?",
                            (now().isoformat(),uid))

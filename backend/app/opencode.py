@@ -6,6 +6,12 @@ import re
 import httpx
 from .resume import suggest_skills
 
+LAST_AI_DIAGNOSTIC={"status":"not_tested","message":"No evaluation attempted yet"}
+def record_ai(status,message,model=None):
+    global LAST_AI_DIAGNOSTIC
+    LAST_AI_DIAGNOSTIC={"status":status,"message":str(message)[:350],"model":model}
+    return LAST_AI_DIAGNOSTIC
+
 def models_from_provider(payload):
     """Only models advertised as free and available; keep user-selected model first."""
     provider_list=payload.get("all",[]) if isinstance(payload,dict) else []
@@ -69,7 +75,7 @@ async def evaluate(job, profile, resume_text=""):
     try:
         async with httpx.AsyncClient(timeout=30,auth=auth) as client:
             explicit=os.getenv("JOBHUNT_OPENCODE_MODEL","").strip()
-            candidates=[]
+            candidates=[None]  # Use working OpenCode default first; free alternatives follow.
             if explicit and "/" in explicit:
                 provider,model=explicit.split("/",1)
                 candidates.append({"providerID":provider,"modelID":model})
@@ -78,8 +84,7 @@ async def evaluate(job, profile, resume_text=""):
                 if resp.is_success:
                     candidates.extend(models_from_provider(resp.json()))
             except (httpx.HTTPError,ValueError):pass
-            # A configured OpenCode default still works without model selection.
-            candidates.append(None)
+            # Keep a working OpenCode default, then try advertised free alternatives.
             unique=[]; seen=set()
             for model in candidates:
                 key=json.dumps(model,sort_keys=True)
@@ -88,18 +93,31 @@ async def evaluate(job, profile, resume_text=""):
             session=await client.post(endpoint+"/session",json={})
             session.raise_for_status()
             sid=session.json()["id"]
-            for model in unique[:4]:
+            for model in unique[:6]:
                 body=dict(payload)
                 if model:body["model"]=model
                 try:
                     answer=await client.post(endpoint+"/session/"+sid+"/message",json=body)
-                    if answer.status_code in (429,500,502,503,504):continue
+                    if answer.status_code in (429,500,502,503,504):
+                        record_ai("provider_error",f"OpenCode returned HTTP {answer.status_code}",model)
+                        continue
                     answer.raise_for_status()
-                    parsed=parse_model_json(answer.json().get("parts",[]))
-                    if parsed:return parsed
-                except (httpx.HTTPError,ValueError,TypeError):continue
-    except (httpx.HTTPError,ValueError,TypeError,KeyError):
-        pass
+                    response=answer.json()
+                    info=response.get("info") or {}
+                    if info.get("error"):
+                        error=info["error"]
+                        record_ai("model_error",json.dumps(error,ensure_ascii=False)[:320],model)
+                        continue
+                    parsed=parse_model_json(response.get("parts",[]))
+                    if parsed:
+                        record_ai("ok","OpenCode returned valid JSON assessment",model)
+                        return parsed
+                    record_ai("invalid_output","OpenCode reply contained no valid JSON score",model)
+                except (httpx.HTTPError,ValueError,TypeError) as exc:
+                    record_ai("request_error",type(exc).__name__+": "+str(exc)[:220],model)
+                    continue
+    except (httpx.HTTPError,ValueError,TypeError,KeyError) as exc:
+        record_ai("connection_error",type(exc).__name__+": "+str(exc)[:220])
     return fallback
 
 async def probe():
@@ -111,8 +129,8 @@ async def probe():
             reply=await client.get(endpoint+"/provider")
             reply.raise_for_status()
             models=models_from_provider(reply.json())
-            return {"reachable":True,"free_models":models[:50],
+            return {"reachable":True,"last_evaluation":LAST_AI_DIAGNOSTIC,"free_models":models[:50],
                     "configured":os.getenv("JOBHUNT_OPENCODE_MODEL","default model")}
     except (httpx.HTTPError,ValueError,TypeError):
-        return {"reachable":False,"free_models":[],"configured":os.getenv("JOBHUNT_OPENCODE_MODEL",""),
+        return {"reachable":False,"last_evaluation":LAST_AI_DIAGNOSTIC,"free_models":[],"configured":os.getenv("JOBHUNT_OPENCODE_MODEL",""),
                 "note":"Start OpenCode serve with a working free model"}

@@ -11,7 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .core import connect, init_db, setting, set_setting, DEFAULT_PROFILE
 from .pipeline import scan, migrate
 from .resume import suggest_skills,suggest_roles
-from .opencode import probe
+from .opencode import probe,evaluate as ai_evaluate
 from .outreach import draft
 from .resume_ai import analyze
 from .fcm import send_notification,configured as fcm_configured
@@ -133,6 +133,41 @@ def companies():
 @app.get("/api/ai/status",dependencies=[Depends(authorized)])
 async def ai_status():
     return await probe()
+@app.post("/api/ai/test",dependencies=[Depends(authorized)])
+async def test_open_code():
+    # Synthetic probe; avoids uploading private resume data just to test AI connectivity.
+    sample={"title":"Penetration Tester","company":"Synthetic Test",
+       "location":"India","description":"Web application penetration testing using Burp Suite and OWASP Top 10."}
+    result=await ai_evaluate(sample,{"roles":["Penetration Tester"],
+        "skills":["Burp Suite","OWASP Top 10"],"strict":True},"")
+    check=await probe()
+    return {"verified":result.get("model_verified",False),"result":result,
+            "diagnostic":check.get("last_evaluation")}
+@app.post("/api/jobs/reevaluate",dependencies=[Depends(authorized)],status_code=202)
+async def reevaluate_jobs():
+    if lock.locked():return {"status":"scan_running"}
+    import asyncio
+    asyncio.create_task(reevaluation_task())
+    return {"status":"queued","message":"Re-evaluating existing jobs; poll /api/jobs"}
+async def reevaluation_task():
+    async with lock:
+        profile=setting("profile",DEFAULT_PROFILE)
+        with connect() as db:
+            pending=[dict(r) for r in db.execute(
+                "SELECT * FROM jobs WHERE model_verified=0 AND active=1 ORDER BY first_seen DESC LIMIT 100")]
+        from .core import now
+        from .pipeline import region_confirmed
+        from .opencode import evaluate
+        import json
+        for job in pending:
+            result=await evaluate(job,profile,setting("resume_text",""))
+            with connect() as db:
+                db.execute("UPDATE jobs SET score=?,insight=?,missing=?,model_verified=? WHERE id=?",
+                    (result["score"],result["insight"],json.dumps(result["missing"]),
+                     int(result["model_verified"]),job["id"]))
+                if result["model_verified"] and job.get("verified_at") and region_confirmed(job) and result["score"]>=int(profile.get("alert_threshold",85)):
+                    db.execute("INSERT OR IGNORE INTO notifications(job_id,created_at) VALUES(?,?)",
+                        (job["id"],now().isoformat()))
 @app.get("/api/resume/analyze",dependencies=[Depends(authorized)])
 async def analyze_resume():
     text=setting("resume_text","")
