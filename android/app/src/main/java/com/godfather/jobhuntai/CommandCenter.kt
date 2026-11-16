@@ -441,7 +441,7 @@ fun JobHuntScreen(activity:Activity) {
                             InfoCard {
                                 Text("Scheduler",fontWeight=FontWeight.Bold)
                                 Text(if(overview.optBoolean("paused"))"Paused" else if(error.isBlank()&&loaded)"Connected (15-minute configured interval)" else "Unknown / offline",
-                                    color=if(error.isBlank()&&loaded)Ocean else Alert)
+                                    color=if(error.isBlank()&&loaded)Ocean else WarningColor)
                                 Text("Last refresh: "+lastUpdated.ifBlank { "Never" },style=MaterialTheme.typography.bodySmall)
                                 Text("Exact next execution is shown only when reported by the backend.",
                                     style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -451,7 +451,7 @@ fun JobHuntScreen(activity:Activity) {
                             InfoCard {
                                 Text("OpenCode / AI",fontWeight=FontWeight.Bold)
                                 Text(if(ai.optBoolean("reachable"))"Reachable" else "Offline or status unavailable",
-                                    color=if(ai.optBoolean("reachable"))Ocean else Alert)
+                                    color=if(ai.optBoolean("reachable"))Ocean else WarningColor)
                                 Text((ai.optJSONArray("free_models")?.length() ?: 0).toString()+" advertised free models",
                                     style=MaterialTheme.typography.bodySmall)
                                 Text("AI-verified jobs in current feed: "+jobs.count{it.optInt("model_verified")==1},
@@ -474,7 +474,7 @@ fun JobHuntScreen(activity:Activity) {
                         items(history) { h ->
                             InfoCard {
                                 Row(verticalAlignment=Alignment.CenterVertically) {
-                                    Text("●",color=if(h.optString("status").contains("fail",true))Alert else Ocean)
+                                    Text("●",color=if(h.optString("status").contains("fail",true))WarningColor else Ocean)
                                     Spacer(Modifier.width(8.dp))
                                     Text(h.txt("status","Scan"),fontWeight=FontWeight.Bold)
                                 }
@@ -498,7 +498,7 @@ fun JobHuntScreen(activity:Activity) {
                                 Text(if(server.isBlank())"Not configured" else server,
                                     style=MaterialTheme.typography.bodySmall)
                                 Text(if(error.isEmpty()&&loaded)"Latest request succeeded" else "Connection not verified",
-                                    color=if(error.isEmpty()&&loaded)Ocean else Alert,
+                                    color=if(error.isEmpty()&&loaded)Ocean else WarningColor,
                                     style=MaterialTheme.typography.labelMedium)
                                 Button(onClick={advanced=true}) {Text("Configure server & pairing key")}
                             }
@@ -598,7 +598,7 @@ fun JobHuntScreen(activity:Activity) {
             Text(j.txt("insight","No analysis available"),
                 style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=TextOverflow.Ellipsis)
             Text(if(j.optInt("model_verified")==1)"✓ AI evaluated" else "◇ AI not verified",
-                style=MaterialTheme.typography.labelSmall,color=if(j.optInt("model_verified")==1)Ocean else Alert)
+                style=MaterialTheme.typography.labelSmall,color=if(j.optInt("model_verified")==1)Ocean else WarningColor)
             Text(when(j.optString("date_basis")) {
                 "publication_date" -> "Published: "+j.txt("posted_at")
                 "creation_lower_bound" -> "Created: "+j.txt("created_at")+" • Publication unverified"
