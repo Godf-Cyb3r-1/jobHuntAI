@@ -82,7 +82,7 @@ class MainActivity:ComponentActivity() {
         }
     }
 }
-@Composable fun JobHuntScreen(activity:Activity) {
+@Composable fun LegacyJobHuntScreen(activity:Activity) {
     val prefs=remember { activity.getSharedPreferences("jobhunt",0) }
     var server by remember { mutableStateOf(prefs.getString("server","") ?: "") }
     val secretStore=remember {
