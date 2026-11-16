@@ -28,7 +28,7 @@ import org.json.JSONObject
 
 private val Ocean = Color(0xFF55D6C2)
 private val Blue = Color(0xFF8DAEFF)
-private val Alert = Color(0xFFFFC978)
+private val WarningColor = Color(0xFFFFC978)
 private val SurfaceDark = Color(0xFF101824)
 
 private fun JSONObject.txt(key:String, fallback:String = "—"):String =
@@ -49,7 +49,14 @@ private val stages=listOf("Saved","Applied","Assessment","Interview","Offer","Re
 @Composable
 fun JobHuntScreen(activity:Activity) {
     val prefs=remember { activity.getSharedPreferences("jobhunt",0) }
-    val secret=remember { TokenStore(activity) }
+    val secret=remember {
+        TokenStore(activity).also { store ->
+            val previous=prefs.getString("token",null)
+            if(!previous.isNullOrBlank()) {
+                runCatching { store.put(previous); prefs.edit().remove("token").apply() }
+            }
+        }
+    }
     var tab by remember { mutableIntStateOf(0) }
     var advanced by remember { mutableStateOf(false) }
     var jobs by remember { mutableStateOf(emptyList<JSONObject>()) }
@@ -135,7 +142,7 @@ fun JobHuntScreen(activity:Activity) {
         return
     }
     val scheme=darkColorScheme(
-        primary=Ocean, secondary=Blue, tertiary=Alert,
+        primary=Ocean, secondary=Blue, tertiary=WarningColor,
         background=Color(0xFF0A101B), surface=SurfaceDark,
         surfaceVariant=Color(0xFF1A2736),
         onBackground=Color(0xFFEAF0F8), onSurface=Color(0xFFEAF0F8),
@@ -219,7 +226,7 @@ fun JobHuntScreen(activity:Activity) {
                             Text("Career command center",style=MaterialTheme.typography.labelSmall,
                                 color=MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        TextButton(onClick={refresh},enabled=!working) {Text("↻ Refresh")}
+                        TextButton(onClick={refresh()},enabled=!working) {Text("↻ Refresh")}
                         TextButton(onClick={tab=4}) {Text("⚙",fontSize=24.sp)}
                     }
                 }
@@ -259,7 +266,7 @@ fun JobHuntScreen(activity:Activity) {
                             ElevatedCard(colors=CardDefaults.elevatedCardColors(containerColor=Color(0xFF162C34))) {
                                 Column(Modifier.fillMaxWidth().padding(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                                     Row(verticalAlignment=Alignment.CenterVertically) {
-                                        Text("●",color=if(error.isEmpty()&&loaded) Ocean else Alert)
+                                        Text("●",color=if(error.isEmpty()&&loaded) Ocean else WarningColor)
                                         Spacer(Modifier.width(8.dp))
                                         Text(if(!loaded)"Connecting" else if(error.isNotBlank())"Connection unavailable"
                                             else if(overview.optBoolean("paused"))"Scanner paused" else "Automation connected",
@@ -389,8 +396,8 @@ fun JobHuntScreen(activity:Activity) {
                                 }
                             }
                         }
-                        val records=(0 until tracker.length()).mapNotNull { i ->
-                            tracker.optJSONObject(tracker.keys().asSequence().toList().getOrNull(i) ?: "")
+                        val records=tracker.keys().asSequence().toList().mapNotNull { key ->
+                            tracker.optJSONObject(key)
                         }.filter { trackStage=="All" || it.optString("stage")==trackStage }
                         LazyColumn(contentPadding=PaddingValues(18.dp),
                             verticalArrangement=Arrangement.spacedBy(10.dp)) {
@@ -399,7 +406,7 @@ fun JobHuntScreen(activity:Activity) {
                                     StatCard("Applications",tracker.length().toString(),"Locally recorded",Modifier.weight(1f))
                                     StatCard("Interviews", (0 until tracker.length()).count {
                                         val k=tracker.keys().asSequence().toList().getOrNull(it)
-                                        tracker.optJSONObject(k)?.optString("stage")=="Interview"
+                                        k != null && tracker.optJSONObject(k)?.optString("stage")=="Interview"
                                     }.toString(),"In progress",Modifier.weight(1f))
                                 }
                             }
