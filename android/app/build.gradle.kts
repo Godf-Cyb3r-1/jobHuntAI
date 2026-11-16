@@ -11,8 +11,8 @@ android {
         applicationId = "com.godfather.jobhuntai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         buildConfigField("String","FCM_APP_ID","\""+config("FCM_APP_ID")+"\"")
         buildConfigField("String","FCM_API_KEY","\""+config("FCM_API_KEY")+"\"")
         buildConfigField("String","FCM_SENDER_ID","\""+config("FCM_SENDER_ID")+"\"")
