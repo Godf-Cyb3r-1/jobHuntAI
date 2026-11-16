@@ -33,8 +33,6 @@ private val SurfaceDark = Color(0xFF101824)
 
 private fun JSONObject.txt(key:String, fallback:String = "—"):String =
     optString(key).takeUnless { it.isNullOrBlank() || it == "null" } ?: fallback
-private fun JSONObject.jobsList():List<JSONObject> =
-    (0 until length()).mapNotNull { null }
 private fun parseJobs(raw:String):List<JSONObject> {
     val a=JSONArray(raw)
     return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
@@ -274,7 +272,7 @@ fun JobHuntScreen(activity:Activity) {
                                     Text("Last refreshed: "+(lastUpdated.ifBlank { "Not yet" }),
                                         style=MaterialTheme.typography.labelMedium)
                                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                                        Button(onClick={background { it.request("/api/scan","POST") };toast="Scan requested"},enabled=!busyAction) {Text("Run scan")}
+                                        Button(onClick={background { it.request("/api/scan","POST") };toast="Scan request submitted; refresh to verify"},enabled=!busyAction) {Text("Run scan")}
                                         OutlinedButton(onClick={
                                             val path=if(overview.optBoolean("paused"))"/api/resume" else "/api/pause"
                                             background { api -> api.request(path,"POST") }
@@ -523,7 +521,7 @@ fun JobHuntScreen(activity:Activity) {
                                     style=MaterialTheme.typography.bodySmall)
                                 OutlinedButton(onClick={
                                     background { it.request("/api/notifications/test","POST") }
-                                    toast="Test request sent (check status and phone permissions)"
+                                    toast="Test request submitted; verify delivery on your phone"
                                 },enabled=!busyAction) {Text("Send test push")}
                             }
                         }
