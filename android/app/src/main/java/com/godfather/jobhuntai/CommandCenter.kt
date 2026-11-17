@@ -20,6 +20,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.delay
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -45,6 +52,30 @@ private fun saveTracker(activity:Activity, data:JSONObject) {
     activity.getSharedPreferences("tracker_v1",0).edit().putString("entries",data.toString()).apply()
 }
 private val stages=listOf("Saved","Applied","Assessment","Interview","Offer","Rejected","Withdrawn")
+private fun parsedTimestamp(value:String):Long {
+    val v=value.trim()
+    if(v.isBlank() || v=="null") return Long.MIN_VALUE
+    return runCatching { Instant.parse(v).toEpochMilli() }.getOrNull()
+        ?: runCatching { OffsetDateTime.parse(v).toInstant().toEpochMilli() }.getOrNull()
+        ?: runCatching { LocalDateTime.parse(v).toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull()
+        ?: runCatching { LocalDate.parse(v.take(10)).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrDefault(Long.MIN_VALUE)
+}
+private fun dateKey(job:JSONObject):Long = when(job.optString("date_basis")) {
+    "publication_date" -> parsedTimestamp(job.optString("posted_at"))
+    "creation_lower_bound" -> parsedTimestamp(job.optString("created_at"))
+    else -> Long.MIN_VALUE
+}
+private fun freshnessRank(job:JSONObject):Int = when(job.optString("date_basis")) {
+    "publication_date" -> if(dateKey(job)==Long.MIN_VALUE) 0 else 2
+    "creation_lower_bound" -> if(dateKey(job)==Long.MIN_VALUE) 0 else 1
+    else -> 0
+}
+private val newestFirst = compareByDescending<JSONObject> { freshnessRank(it) }
+    .thenByDescending { dateKey(it) }
+    .thenByDescending { it.optInt("score") }
+private val highestMatchFirst = compareByDescending<JSONObject> { it.optInt("score") }
+    .then(newestFirst)
+
 
 @Composable
 fun JobHuntScreen(activity:Activity) {
@@ -74,6 +105,7 @@ fun JobHuntScreen(activity:Activity) {
     var details by remember { mutableStateOf("") }
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
+    var sortBy by remember { mutableStateOf("Newest") }
     var trackStage by remember { mutableStateOf("All") }
     var editTrack by remember { mutableStateOf<JSONObject?>(null) }
     var trackNotes by remember { mutableStateOf("") }
@@ -81,6 +113,7 @@ fun JobHuntScreen(activity:Activity) {
     var trackDate by remember { mutableStateOf("") }
     var toast by remember { mutableStateOf("") }
     val scope=rememberCoroutineScope()
+    LaunchedEffect(toast) { if(toast.isNotBlank()) { delay(3500); toast="" } }
     val ctx=LocalContext.current
     val server=prefs.getString("server","") ?: ""
     val token=secret.get()
@@ -132,7 +165,7 @@ fun JobHuntScreen(activity:Activity) {
     LaunchedEffect(server,token,advanced) { if(!advanced) refresh() }
     if(advanced) {
         Column {
-            Row(Modifier.fillMaxWidth().padding(8.dp),verticalAlignment=Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp),verticalAlignment=Alignment.CenterVertically) {
                 TextButton(onClick={advanced=false}) { Text("‹ Back to settings") }
                 Spacer(Modifier.weight(1f))
                 Text("Existing controls",style=MaterialTheme.typography.labelMedium)
@@ -175,49 +208,95 @@ fun JobHuntScreen(activity:Activity) {
         }
         if(editTrack!=null) {
             val j=editTrack!!
-            AlertDialog(
-                onDismissRequest={editTrack=null},
-                title={Text("Track application")},
-                text={
-                    Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Text(j.txt("title"),style=MaterialTheme.typography.titleMedium)
-                        Text(j.txt("company"),color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("Status",style=MaterialTheme.typography.labelLarge)
-                        Column(Modifier.heightIn(max=155.dp).verticalScroll(rememberScrollState())) {
-                            stages.chunked(3).forEach { row ->
-                                Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
-                                    row.forEach { s ->
-                                        FilterChip(selected=trackValue==s,onClick={trackValue=s},label={Text(s,fontSize=11.sp)})
+            Dialog(onDismissRequest={editTrack=null}) {
+                Surface(
+                    modifier=Modifier.fillMaxWidth().heightIn(max=690.dp),
+                    shape=RoundedCornerShape(26.dp),
+                    color=Color(0xFF172431),
+                    tonalElevation=8.dp
+                ) {
+                    Column(
+                        modifier=Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                        verticalArrangement=Arrangement.spacedBy(13.dp)
+                    ) {
+                        Row(verticalAlignment=Alignment.CenterVertically) {
+                            Text("APPLICATION TRACKER",color=Ocean,
+                                style=MaterialTheme.typography.labelMedium,fontWeight=FontWeight.Bold,
+                                modifier=Modifier.weight(1f),letterSpacing=1.2.sp)
+                            TextButton(onClick={editTrack=null}) { Text("Close") }
+                        }
+                        Text(j.txt("title"),style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)
+                        Text(j.txt("company")+"  •  "+j.txt("location"),
+                            color=MaterialTheme.colorScheme.onSurfaceVariant,
+                            style=MaterialTheme.typography.bodySmall)
+                        HorizontalDivider(color=Color(0xFF344454))
+                        Text("Where are you in the process?",
+                            fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.titleMedium)
+                        Column(verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                            stages.forEachIndexed { index, state ->
+                                val chosen=trackValue==state
+                                val accent=when(state) {
+                                    "Offer" -> Ocean
+                                    "Rejected","Withdrawn" -> WarningColor
+                                    else -> Blue
+                                }
+                                Surface(
+                                    shape=RoundedCornerShape(14.dp),
+                                    color=if(chosen) Color(0xFF253E4C) else Color(0xFF1E2C3B),
+                                    border=BorderStroke(if(chosen) 1.5.dp else 0.5.dp,
+                                        if(chosen) accent else Color(0xFF354351)),
+                                    onClick={trackValue=state},
+                                    modifier=Modifier.fillMaxWidth()
+                                ) {
+                                    Row(Modifier.padding(horizontal=14.dp,vertical=11.dp),
+                                        verticalAlignment=Alignment.CenterVertically) {
+                                        Text(if(chosen)"●" else "○",color=if(chosen)accent else Blue,
+                                            modifier=Modifier.width(29.dp),fontSize=18.sp)
+                                        Text(state,modifier=Modifier.weight(1f),
+                                            fontWeight=if(chosen)FontWeight.Bold else FontWeight.Normal)
+                                        if(chosen) Text("SELECTED",color=accent,
+                                            style=MaterialTheme.typography.labelSmall)
                                     }
                                 }
                             }
                         }
                         OutlinedTextField(value=trackDate,onValueChange={trackDate=it},
-                            label={Text("Follow-up date / reminder")},modifier=Modifier.fillMaxWidth(),singleLine=true)
+                            label={Text("Follow-up date (optional)")},
+                            placeholder={Text("e.g., 2026-11-24")},
+                            modifier=Modifier.fillMaxWidth(),singleLine=true,
+                            shape=RoundedCornerShape(14.dp))
                         OutlinedTextField(value=trackNotes,onValueChange={trackNotes=it},
-                            label={Text("Notes / recruiter / next steps")},modifier=Modifier.fillMaxWidth(),minLines=2,maxLines=4)
+                            label={Text("Notes & next steps")},
+                            placeholder={Text("Recruiter, assessment, interview details...")},
+                            modifier=Modifier.fillMaxWidth(),minLines=3,maxLines=5,
+                            shape=RoundedCornerShape(14.dp))
+                        Button(
+                            onClick={
+                                val id=j.txt("id")
+                                val entry=JSONObject().put("job",j).put("stage",trackValue)
+                                    .put("notes",trackNotes).put("follow_up",trackDate)
+                                    .put("updated",System.currentTimeMillis())
+                                val copy=JSONObject(tracker.toString())
+                                copy.put(id,entry)
+                                tracker=copy
+                                saveTracker(activity,copy)
+                                editTrack=null
+                                toast="✓ Application updated"
+                            },
+                            modifier=Modifier.fillMaxWidth().height(52.dp),
+                            shape=RoundedCornerShape(14.dp)
+                        ) { Text("Save application status",fontWeight=FontWeight.Bold) }
+                        Text("Only on this phone · No automatic applications",
+                            modifier=Modifier.fillMaxWidth(),
+                            color=MaterialTheme.colorScheme.onSurfaceVariant,
+                            style=MaterialTheme.typography.labelSmall)
                     }
-                },
-                confirmButton={
-                    TextButton(onClick={
-                        val id=j.txt("id")
-                        val entry=JSONObject().put("job",j).put("stage",trackValue)
-                            .put("notes",trackNotes).put("follow_up",trackDate)
-                            .put("updated",System.currentTimeMillis())
-                        val copy=JSONObject(tracker.toString())
-                        copy.put(id,entry)
-                        tracker=copy
-                        saveTracker(activity,copy)
-                        editTrack=null
-                        toast="Application saved on this device"
-                    }) {Text("Save")}
-                },
-                dismissButton={TextButton(onClick={editTrack=null}) {Text("Cancel")}}
-            )
+                }
+            }
         }
         Scaffold(
             topBar={
-                Surface(tonalElevation=2.dp) {
+                Surface(tonalElevation=2.dp,modifier=Modifier.statusBarsPadding()) {
                     Row(Modifier.fillMaxWidth().padding(horizontal=18.dp, vertical=14.dp),
                         verticalAlignment=Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -335,7 +414,7 @@ fun JobHuntScreen(activity:Activity) {
                             }
                         }
                         item { SectionHeading("Recommended matches","See jobs", {tab=1}) }
-                        items(jobs.filter {it.optInt("score")>=85}.take(3)) { job ->
+                        items(jobs.filter {it.optInt("score")>=85}.sortedWith(newestFirst).take(3)) { job ->
                             CompactJob(job,onOpen={ selectedJob=job; details=""
                                 background { api -> val d=JSONObject(api.request("/api/jobs/"+job.txt("id"))); withContext(Dispatchers.Main){details=d.optString("description")} }
                             },onTrack={
@@ -358,6 +437,21 @@ fun JobHuntScreen(activity:Activity) {
                                 }
                             }
                         }
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal=18.dp),
+                            verticalAlignment=Alignment.CenterVertically
+                        ) {
+                            Text("Sort by",style=MaterialTheme.typography.labelMedium,
+                                color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(10.dp))
+                            listOf("Newest","Top match").forEach { option ->
+                                FilterChip(
+                                    selected=sortBy==option,onClick={sortBy=option},
+                                    label={Text(option,fontSize=12.sp)},
+                                    modifier=Modifier.padding(end=8.dp)
+                                )
+                            }
+                        }
                         val result=jobs.filter { j ->
                             (query.isBlank() || (j.txt("title")+" "+j.txt("company")+" "+j.txt("location")).contains(query,true)) &&
                             when(filter) {
@@ -366,10 +460,10 @@ fun JobHuntScreen(activity:Activity) {
                                 "Saved" -> tracker.has(j.txt("id"))
                                 else -> true
                             }
-                        }.sortedByDescending { it.optInt("score") }
+                        }.sortedWith(if(sortBy=="Newest") newestFirst else highestMatchFirst)
                         LazyColumn(contentPadding=PaddingValues(horizontal=18.dp, vertical=6.dp),
                             verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                            item {Text(result.size.toString()+" opportunities",color=MaterialTheme.colorScheme.onSurfaceVariant,
+                            item {Text(result.size.toString()+" opportunities · "+(if(sortBy=="Newest")"Newest verified dates first" else "Highest score first"),color=MaterialTheme.colorScheme.onSurfaceVariant,
                                 style=MaterialTheme.typography.labelMedium)}
                             items(result) { j ->
                                 CompactJob(j,onOpen={
@@ -386,48 +480,138 @@ fun JobHuntScreen(activity:Activity) {
                         }
                     }
                     2 -> Column(Modifier.fillMaxSize()) {
-                        Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(9.dp)) {
-                            Text("Application tracker",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold)
-                            Text("Private, saved on this phone",color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        val entries=tracker.keys().asSequence().toList().mapNotNull { key ->
+                            tracker.optJSONObject(key)
+                        }
+                        val visible=entries.filter {
+                            trackStage=="All" || it.optString("stage")==trackStage
+                        }.sortedByDescending { it.optLong("updated",0L) }
+                        Column(Modifier.padding(start=18.dp,end=18.dp,top=16.dp,bottom=5.dp),
+                            verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                            Text("My applications",style=MaterialTheme.typography.headlineMedium,
+                                fontWeight=FontWeight.Bold)
+                            Text("Stay organized from saving a role to receiving an offer.",
+                                style=MaterialTheme.typography.bodySmall,
+                                color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                                StatCard("In pipeline",entries.count {
+                                    it.optString("stage")!="Rejected" &&
+                                    it.optString("stage")!="Withdrawn" &&
+                                    it.optString("stage")!="Offer"
+                                }.toString(),"Active records",Modifier.weight(1f))
+                                StatCard("Interviews",entries.count {
+                                    it.optString("stage")=="Interview"
+                                }.toString(),"At interview",Modifier.weight(1f))
+                                StatCard("Offers",entries.count {
+                                    it.optString("stage")=="Offer"
+                                }.toString(),"Successes",Modifier.weight(1f))
+                            }
+                            Text("APPLICATION STAGES",fontWeight=FontWeight.Bold,
+                                color=Ocean,style=MaterialTheme.typography.labelMedium,
+                                letterSpacing=1.sp)
                             Row(Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-                                (listOf("All")+stages).forEach { s ->
-                                    FilterChip(selected=trackStage==s,onClick={trackStage=s},label={Text(s)})
+                                horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                (listOf("All")+stages).forEach { state ->
+                                    FilterChip(
+                                        selected=trackStage==state,onClick={trackStage=state},
+                                        label={Text(state+" ("+
+                                            (if(state=="All") entries.size else entries.count {
+                                                it.optString("stage")==state
+                                            })+")",fontSize=12.sp)}
+                                    )
                                 }
                             }
                         }
-                        val records=tracker.keys().asSequence().toList().mapNotNull { key ->
-                            tracker.optJSONObject(key)
-                        }.filter { trackStage=="All" || it.optString("stage")==trackStage }
-                        LazyColumn(contentPadding=PaddingValues(18.dp),
-                            verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                            item {
-                                Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                                    StatCard("Applications",tracker.length().toString(),"Locally recorded",Modifier.weight(1f))
-                                    StatCard("Interviews", (0 until tracker.length()).count {
-                                        val k=tracker.keys().asSequence().toList().getOrNull(it)
-                                        k != null && tracker.optJSONObject(k)?.optString("stage")=="Interview"
-                                    }.toString(),"In progress",Modifier.weight(1f))
+                        LazyColumn(
+                            contentPadding=PaddingValues(start=18.dp,end=18.dp,top=8.dp,bottom=22.dp),
+                            verticalArrangement=Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(visible) { entry ->
+                                val job=entry.optJSONObject("job") ?: JSONObject()
+                                val stage=entry.optString("stage","Saved")
+                                ElevatedCard(Modifier.fillMaxWidth(),
+                                    shape=RoundedCornerShape(20.dp),
+                                    colors=CardDefaults.elevatedCardColors(containerColor=Color(0xFF182532))) {
+                                    Column(Modifier.padding(17.dp),
+                                        verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                                        Row(verticalAlignment=Alignment.CenterVertically) {
+                                            Surface(shape=RoundedCornerShape(12.dp),
+                                                color=Color(0xFF293D4D)) {
+                                                Text("▣",modifier=Modifier.padding(12.dp),
+                                                    fontSize=21.sp,color=Ocean)
+                                            }
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(job.txt("title"),fontWeight=FontWeight.Bold,
+                                                    style=MaterialTheme.typography.titleMedium,
+                                                    maxLines=2,overflow=TextOverflow.Ellipsis)
+                                                Text(job.txt("company"),
+                                                    color=MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    style=MaterialTheme.typography.bodySmall)
+                                            }
+                                        }
+                                        Row(verticalAlignment=Alignment.CenterVertically) {
+                                            Surface(
+                                                shape=RoundedCornerShape(20.dp),
+                                                color=if(stage=="Offer")Color(0xFF174B41) else Color(0xFF2D3C53)
+                                            ) {
+                                                Text("● "+stage,modifier=Modifier.padding(horizontal=12.dp,vertical=7.dp),
+                                                    color=if(stage=="Offer")Ocean else Blue,
+                                                    style=MaterialTheme.typography.labelMedium,
+                                                    fontWeight=FontWeight.Bold)
+                                            }
+                                            Spacer(Modifier.weight(1f))
+                                            Text(job.optInt("score").toString()+"% fit",
+                                                color=Ocean,style=MaterialTheme.typography.labelMedium)
+                                        }
+                                        if(stage in listOf("Saved","Applied","Assessment","Interview","Offer")) {
+                                            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                                                stages.take(5).forEachIndexed { index, s ->
+                                                    val done=index<=stages.indexOf(stage)
+                                                    Box(
+                                                        Modifier.weight(1f).height(5.dp)
+                                                            .background(if(done)Ocean else Color(0xFF364654),
+                                                                RoundedCornerShape(4.dp))
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        if(entry.optString("follow_up").isNotBlank())
+                                            Text("◷  Follow up: "+entry.optString("follow_up"),
+                                                style=MaterialTheme.typography.bodySmall,color=WarningColor)
+                                        if(entry.optString("notes").isNotBlank())
+                                            Text(entry.optString("notes"),
+                                                style=MaterialTheme.typography.bodySmall,
+                                                color=MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines=3,overflow=TextOverflow.Ellipsis)
+                                        HorizontalDivider(color=Color(0xFF344454))
+                                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(
+                                                onClick={
+                                                    editTrack=job;trackValue=stage
+                                                    trackNotes=entry.optString("notes")
+                                                    trackDate=entry.optString("follow_up")
+                                                },modifier=Modifier.weight(1f)
+                                            ) {Text("Update status")}
+                                            val jobUrl=job.optString("url")
+                                            OutlinedButton(
+                                                onClick={
+                                                    if(jobUrl.startsWith("https://"))
+                                                        ctx.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(jobUrl)))
+                                                },enabled=jobUrl.startsWith("https://"),
+                                                modifier=Modifier.weight(1f)
+                                            ) {Text("View job ↗")}
+                                        }
+                                    }
                                 }
                             }
-                            items(records) { entry ->
-                                val j=entry.optJSONObject("job") ?: JSONObject()
-                                InfoCard {
-                                    Text(j.txt("title"),fontWeight=FontWeight.Bold)
-                                    Text(j.txt("company")+" • "+j.txt("location"),style=MaterialTheme.typography.bodySmall)
-                                    AssistChip(onClick={},label={Text(entry.optString("stage","Saved"))})
-                                    if(entry.optString("follow_up").isNotBlank()) Text("Follow up: "+entry.optString("follow_up"),
-                                        style=MaterialTheme.typography.bodySmall)
-                                    if(entry.optString("notes").isNotBlank()) Text(entry.optString("notes"),
-                                        style=MaterialTheme.typography.bodySmall,maxLines=3)
-                                    TextButton(onClick={
-                                        editTrack=j;trackValue=entry.optString("stage","Saved")
-                                        trackNotes=entry.optString("notes");trackDate=entry.optString("follow_up")
-                                    }) {Text("Update application →")}
-                                }
+                            if(visible.isEmpty()) item {
+                                EmptyState(
+                                    if(entries.isEmpty())"Your journey starts here" else "No jobs in this stage",
+                                    if(entries.isEmpty())"Find a job, tap Track, and update each step of your application journey."
+                                    else "Choose another stage to see your saved applications."
+                                )
                             }
-                            if(records.isEmpty()) item { EmptyState("Nothing tracked yet",
-                                "Open a job in Explore and tap Track to save its status and follow-up notes.") }
                         }
                     }
                     3 -> LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(18.dp),
