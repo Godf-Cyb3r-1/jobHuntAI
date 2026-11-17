@@ -3,7 +3,7 @@
 ## Build / install
 [Android APK Actions workflow](https://github.com/Godf-Cyb3r-1/jobHuntAI/actions/workflows/android-apk.yml) produces `jobhuntai-debug-apk` ZIP containing `app-debug.apk`. Install on Android 8.0+, allow notification permission on Android 13+.
 
-The app **refuses cleartext HTTP**. Install Tailscale on Windows and Android and connect through Tailscale Serve's stable HTTPS URL. The pairing key is generated on the Windows backend and stored encrypted with Android Keystore on the device.
+The Android client accepts **HTTP and HTTPS** server URLs (including `http://<server-ip>:8765`). **Warning:** HTTP sends the pairing bearer token and resume/job data without transport encryption; only use HTTP on a trusted private network. For internet access, prefer Tailscale Serve with HTTPS. The pairing key is stored encrypted with Android Keystore on the device.
 
 ## Firebase real-time push — required one-time setup
 
