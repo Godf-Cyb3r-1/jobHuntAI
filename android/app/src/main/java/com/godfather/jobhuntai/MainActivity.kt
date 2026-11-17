@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit
 class Api(private val base:String, private val token:String) {
     private val http = OkHttpClient.Builder().callTimeout(65, TimeUnit.SECONDS).build()
     fun request(path:String,method:String="GET",payload:String?=null):String {
-        if (!base.startsWith("https://")) throw IOException("Use an HTTPS server URL")
+        if (!(base.startsWith("http://") || base.startsWith("https://"))) throw IOException("Use an HTTP or HTTPS server URL")
         val builder=Request.Builder().url(base.trimEnd('/')+path)
           .header("Authorization","Bearer "+token)
         val body=payload?.toRequestBody("application/json".toMediaType())
@@ -52,7 +52,7 @@ class Api(private val base:String, private val token:String) {
         }
     }
     fun upload(bytes:ByteArray,filename:String):String {
-        if (!base.startsWith("https://")) throw IOException("Use an HTTPS server URL")
+        if (!(base.startsWith("http://") || base.startsWith("https://"))) throw IOException("Use an HTTP or HTTPS server URL")
         val body=MultipartBody.Builder().setType(MultipartBody.FORM)
           .addFormDataPart("file",filename,bytes.toRequestBody("application/octet-stream".toMediaType()))
           .build()
@@ -151,7 +151,7 @@ class MainActivity:ComponentActivity() {
         }
     }
     LaunchedEffect(server,token) {
-        if(server.startsWith("https://") && token.isNotBlank() &&
+        if((server.startsWith("http://") || server.startsWith("https://")) && token.isNotBlank() &&
            BuildConfig.FCM_APP_ID.isNotBlank() && FirebaseApp.getApps(ctx).isNotEmpty()) {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { fcm ->
                 if(fcm.isNotBlank()) scope.launch {
@@ -165,7 +165,7 @@ class MainActivity:ComponentActivity() {
         }
     }
     LaunchedEffect(Unit) {
-        if(server.startsWith("https://") && token.isNotBlank())refresh()
+        if((server.startsWith("http://") || server.startsWith("https://")) && token.isNotBlank())refresh()
     }
     if(fullDetails!=null) {
         AlertDialog(
@@ -187,7 +187,7 @@ class MainActivity:ComponentActivity() {
             LazyColumn(verticalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(bottom=28.dp)) {
                 item {
                     OutlinedTextField(server,{server=it},label={Text("Windows server HTTPS URL")},
-                        placeholder={Text("https://your-tunnel.example")},modifier=Modifier.fillMaxWidth(),singleLine=true)
+                        placeholder={Text("http://your-server:8765 or https://...")},modifier=Modifier.fillMaxWidth(),singleLine=true)
                     OutlinedTextField(token,{token=it},label={Text("API bearer token")},
                         visualTransformation=PasswordVisualTransformation(),modifier=Modifier.fillMaxWidth(),singleLine=true)
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
